@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { mprInvoke } from "../lib/mprAuth";
 
 type Module = "customers" | "venues" | "auspicious_dates";
-type Row = Record<string, any> & { id: string };
+type Row = Record<string, any> & { id?: string };
 type Props = { module: Module; supabase: SupabaseClient; permissions: {module:string;action:string}[]; role: string };
 const configs = {
   customers: { title: "Customers", list: "list-customers", save: "save-customer", deactivate: "delete-customer", columns: ["customer_name","mobile","email","city"] },

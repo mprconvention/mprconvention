@@ -245,62 +245,126 @@ Deno.serve(async (req) => {
     }
 
     // Booking workspace: read reserved entries and reference data for users with booking access.
-    if (action === "list-bookings") {
-      if (!allowed(ctx, "bookings", "view")) return fail("Bookings view permission required", 403);
-      const { data, error } = await db.from("calendar_entries")
-        .select("id,venue_id,customer_id,event_name,event_type_code,booking_source_code,booking_mode,start_date,end_date,start_time,end_time,booking_status,status,notes,timezone,starts_at,ends_at")
-        .eq("entry_type", "reserved").order("starts_at", { ascending: false });
-      if (error) throw error;
-      return reply({ data: data ?? [] });
-    }
-    if (action === "list-booking-customers") {
-      if (!allowed(ctx, "bookings", "view")) return fail("Bookings view permission required", 403);
-      const { data, error } = await db.from("customers")
-        .select("id,customer_name,mobile,email").order("customer_name");
-      if (error) throw error;
-      return reply({ data: data ?? [] });
-    }
-    if (action === "save-booking") {
-      const id = b.id ? String(b.id) : null;
-      const isEdit = Boolean(id);
-      if (isEdit ? !allowed(ctx, "bookings", "edit") : !allowed(ctx, "bookings", "create"))
-        return fail("Bookings permission denied", 403);
-      if (id && !UUID.test(id)) return fail("Invalid booking ID");
-      const payload = {
-        venue_id: b.venue_id, customer_id: b.customer_id,
-        event_name: requireText(b.event_name, "Event name", 200),
-        event_type_code: cleanText(b.event_type_code, 80),
-        booking_source_code: cleanText(b.booking_source_code, 80),
-        booking_mode: b.booking_mode, booking_status: b.booking_status,
-        start_date: b.start_date, end_date: b.end_date,
-        start_time: b.booking_mode === "time_slot" ? b.start_time : null,
-        end_time: b.booking_mode === "time_slot" ? b.end_time : null,
-        notes: cleanText(b.notes, 2000)
-      };
-      const { data, error } = await db.rpc("mpr_save_booking", {
-        p_actor_id: ctx.user.id, p_booking_id: id, p_payload: payload
-      });
-      if (error) throw error;
-      return reply({ data: { id: data } });
-    }
-    if (action === "cancel-booking") {
-      if (!allowed(ctx, "bookings", "delete")) return fail("Bookings delete permission required", 403);
-      const id = String(b.id ?? "");
-      if (!UUID.test(id)) return fail("Invalid booking ID");
-      const { data, error } = await db.from("calendar_entries")
-        .update({ status: "inactive", updated_by: ctx.user.id, updated_at: new Date().toISOString() })
-        .eq("id", id).eq("entry_type", "reserved").eq("status", "active")
-        .select("id").maybeSingle();
-      if (error) throw error;
-      if (!data) return fail("Active booking not found", 404);
-      return reply({ ok: true });
-    }
+    // Booking workspace: reservations and blocked periods.
+if (action === "list-bookings") {
+  if (!allowed(ctx, "bookings", "view"))
+    return fail("Bookings view permission required", 403);
 
-    return fail("Unknown action");
-  } catch (e) {
-    console.error("mpr-api failed", e);
-    const message = e instanceof Error ? e.message : "Request failed";
-    // Surface safe validation/database messages; never return secrets or raw stack traces.
-    return reply({ error: message.slice(0, 240) }, 400);
+  const { data, error } = await db.from("calendar_entries")
+    .select(`
+      id,venue_id,customer_id,event_name,event_type_code,
+      booking_source_code,entry_type,booking_mode,start_date,
+      end_date,start_time,end_time,booking_status,
+      block_reason_code,status,notes,timezone,starts_at,ends_at
+    `)
+    .in("entry_type", ["reserved", "blocked"])
+    .order("starts_at", { ascending: false });
+
+  if (error) throw error;
+  return reply({ data: data ?? [] });
+}
+
+if (action === "list-booking-customers") {
+  if (!allowed(ctx, "bookings", "view"))
+    return fail("Bookings view permission required", 403);
+
+  const { data, error } = await db.from("customers")
+    .select("id,customer_name,mobile,email")
+    .order("customer_name");
+
+  if (error) throw error;
+  return reply({ data: data ?? [] });
+}
+
+if (action === "save-booking") {
+  const id = b.id ? String(b.id) : null;
+  const isEdit = Boolean(id);
+
+  if (
+    isEdit
+      ? !allowed(ctx, "bookings", "edit")
+      : !allowed(ctx, "bookings", "create")
+  ) {
+    return fail("Bookings permission denied", 403);
   }
+
+  if (id && !UUID.test(id)) return fail("Invalid booking ID");
+
+  const entryStatus = String(b.booking_status ?? "");
+  const isBlocked = entryStatus === "blocked";
+
+  if (!["pending", "confirmed", "blocked"].includes(entryStatus)) {
+    return fail("Invalid entry status");
+  }
+
+  const venueId = String(b.venue_id ?? "");
+  if (!UUID.test(venueId)) return fail("Valid venue is required");
+
+  const customerId = isBlocked ? null : String(b.customer_id ?? "");
+  if (!isBlocked && !UUID.test(customerId ?? "")) {
+    return fail("Customer is required for reservations");
+  }
+
+  const startDate = String(b.start_date ?? "");
+  const endDate = String(b.end_date ?? "");
+
+  if (!datePattern.test(startDate) || !datePattern.test(endDate)) {
+    return fail("Valid start and end dates are required");
+  }
+
+  const blockReason = isBlocked
+    ? requireText(b.block_reason_code, "Block reason", 100)
+    : null;
+
+  const payload = {
+    venue_id: venueId,
+    customer_id: customerId,
+    event_name: requireText(b.event_name, "Event or block name", 200),
+    event_type_code: cleanText(b.event_type_code, 80),
+    booking_source_code: cleanText(b.booking_source_code, 80),
+    booking_mode: b.booking_mode,
+    booking_status: isBlocked ? null : entryStatus,
+    entry_type: isBlocked ? "blocked" : "reserved",
+    block_reason_code: blockReason,
+    start_date: startDate,
+    end_date: endDate,
+    start_time: b.booking_mode === "time_slot" ? b.start_time : null,
+    end_time: b.booking_mode === "time_slot" ? b.end_time : null,
+    notes: cleanText(b.notes, 2000)
+  };
+
+  const { data, error } = await db.rpc("mpr_save_booking", {
+    p_actor_id: ctx.user.id,
+    p_booking_id: id,
+    p_payload: payload
+  });
+
+  if (error) throw error;
+  return reply({ data: { id: data } });
+}
+
+if (action === "cancel-booking") {
+  if (!allowed(ctx, "bookings", "delete"))
+    return fail("Bookings delete permission required", 403);
+
+  const id = String(b.id ?? "");
+  if (!UUID.test(id)) return fail("Invalid calendar entry ID");
+
+  const { data, error } = await db.from("calendar_entries")
+    .update({
+      status: "cancelled",
+      updated_by: ctx.user.id,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", id)
+    .in("entry_type", ["reserved", "blocked"])
+    .eq("status", "active")
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return fail("Active calendar entry not found", 404);
+
+  return reply({ ok: true });
+}
 });

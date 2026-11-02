@@ -11,6 +11,7 @@ import {
 import { MprCalendars } from './components/MprCalendars';
 import { AdminLovManager } from './components/AdminLovManager';
 import { UserManagement } from './components/UserManagement';
+import { MasterDataManager } from './components/MasterDataManager';
 
 type Page = 'dashboard'|'calendar'|'bookings'|'customers'|'venues'|'auspicious'|'users'|'lovs'|'reports'|'settings';
 
@@ -92,7 +93,10 @@ export default function App() {
         {page==='calendar'&&<MprCalendars supabase={supabase}/>}
         {page==='users'&&user.role==='admin'&&<UserManagement/>}
         {page==='lovs'&&user.role==='admin'&&<AdminLovManager supabase={supabase}/>}
-        {!['dashboard','calendar','users','lovs'].includes(page)&&<ComingSoon page={page}/>}
+        {page==='customers'&&<MasterDataManager module="customers" supabase={supabase} permissions={permissions} role={user.role}/>}
+        {page==='venues'&&<MasterDataManager module="venues" supabase={supabase} permissions={permissions} role={user.role}/>}
+        {page==='auspicious'&&<MasterDataManager module="auspicious_dates" supabase={supabase} permissions={permissions} role={user.role}/>}
+        {!['dashboard','calendar','users','lovs','customers','venues','auspicious'].includes(page)&&<ComingSoon page={page}/>}
         {page==='users'&&user.role!=='admin'&&<NoAccess/>}
         {page==='lovs'&&user.role!=='admin'&&<NoAccess/>}
         <footer className="footer"><span>© {new Date().getFullYear()} MPR Management</span><span>Secure operations <ShieldCheck size={13}/></span></footer>

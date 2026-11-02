@@ -12,6 +12,7 @@ import { MprCalendars } from './components/MprCalendars';
 import { AdminLovManager } from './components/AdminLovManager';
 import { UserManagement } from './components/UserManagement';
 import { MasterDataManager } from './components/MasterDataManager';
+import { BookingManager } from './components/BookingManager';
 
 type Page = 'dashboard'|'calendar'|'bookings'|'customers'|'venues'|'auspicious'|'users'|'lovs'|'reports'|'settings';
 
@@ -91,12 +92,13 @@ export default function App() {
         <div className="page-heading"><div><div className="eyebrow">MANAGEMENT CONSOLE</div><h1>{pageTitle(page)}</h1><p>{pageSubtitle(page)}</p></div><div className="date-chip"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short',year:'numeric'})}</div></div>
         {page==='dashboard'&&<Dashboard user={user} onNavigate={setPage}/>}
         {page==='calendar'&&<MprCalendars supabase={supabase}/>}
+        {page==='bookings'&&<BookingManager supabase={supabase} permissions={permissions} role={user.role}/>}
         {page==='users'&&user.role==='admin'&&<UserManagement/>}
         {page==='lovs'&&user.role==='admin'&&<AdminLovManager supabase={supabase}/>}
         {page==='customers'&&<MasterDataManager module="customers" supabase={supabase} permissions={permissions} role={user.role}/>}
         {page==='venues'&&<MasterDataManager module="venues" supabase={supabase} permissions={permissions} role={user.role}/>}
         {page==='auspicious'&&<MasterDataManager module="auspicious_dates" supabase={supabase} permissions={permissions} role={user.role}/>}
-        {!['dashboard','calendar','users','lovs','customers','venues','auspicious'].includes(page)&&<ComingSoon page={page}/>}
+        {!['dashboard','calendar','bookings','users','lovs','customers','venues','auspicious'].includes(page)&&<ComingSoon page={page}/>}
         {page==='users'&&user.role!=='admin'&&<NoAccess/>}
         {page==='lovs'&&user.role!=='admin'&&<NoAccess/>}
         <footer className="footer"><span>© {new Date().getFullYear()} MPR Management</span><span>Secure operations <ShieldCheck size={13}/></span></footer>

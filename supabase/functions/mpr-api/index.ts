@@ -365,6 +365,14 @@ if (action === "cancel-booking") {
   if (error) throw error;
   if (!data) return fail("Active calendar entry not found", 404);
 
-  return reply({ ok: true });
+    return reply({ ok: true });
 }
+
+    return fail("Unknown action");
+  } catch (error) {
+    const message = error instanceof Error
+      ? error.message
+      : "Request failed";
+    return fail(message);
+  }
 });

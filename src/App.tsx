@@ -1,3 +1,131 @@
+import { useEffect, useState } from 'react';
+import {
+  Activity, CalendarDays, Users, Building2, ClipboardList, Settings, LogOut,
+  Menu, Search, ChevronDown, ArrowUpRight, ShieldCheck, LockKeyhole,
+  LayoutDashboard, CalendarCheck, CalendarX, Star, KeyRound, Eye, EyeOff
+} from 'lucide-react';
+import { supabase, configReady } from './lib/supabase';
+import {
+  getMprToken, mprLogin, mprLogout, mprInvoke, mprChangePassword, type MprUser
+} from './lib/mprAuth';
+import { MprCalendars } from './components/MprCalendars';
+import { AdminLovManager } from './components/AdminLovManager';
+import { UserManagement } from './components/UserManagement';
+
+type Page = 'dashboard'|'calendar'|'bookings'|'customers'|'venues'|'auspicious'|'users'|'lovs'|'reports'|'settings';
+
+const nav: {id: Page; label: string; icon: any; module: string}[] = [
+  {id:'dashboard',label:'Dashboard',icon:LayoutDashboard,module:'dashboard'},
+  {id:'calendar',label:'Event calendars',icon:CalendarDays,module:'calendar'},
+  {id:'bookings',label:'Bookings',icon:ClipboardList,module:'bookings'},
+  {id:'customers',label:'Customers',icon:Users,module:'customers'},
+  {id:'venues',label:'Venues',icon:Building2,module:'venues'},
+  {id:'auspicious',label:'Auspicious dates',icon:Star,module:'auspicious_dates'},
+  {id:'users',label:'User access',icon:ShieldCheck,module:'users'},
+  {id:'lovs',label:'Configuration',icon:Settings,module:'lovs'},
+  {id:'reports',label:'Reports',icon:Activity,module:'reports'}
+];
+
+export default function App() {
+  const [user,setUser] = useState<MprUser|null>(null);
+  const [permissions,setPermissions] = useState<{module:string;action:string}[]>([]);
+  const [page,setPage] = useState<Page>('dashboard');
+  const [loading,setLoading] = useState(true);
+  const [mobile,setMobile] = useState(false);
+  const [notice,setNotice] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    async function init() {
+      if (!supabase || !getMprToken()) { setLoading(false); return; }
+      try {
+        const r = await mprInvoke<{user:MprUser;permissions:{module:string;action:string}[]}>(supabase,'mpr-me',{});
+        if (live) { setUser(r.user); setPermissions(r.permissions??[]); }
+      } catch {
+        if (live) sessionStorage.removeItem('mpr_session_token');
+      } finally {
+        if (live) setLoading(false);
+      }
+    }
+    init();
+    return () => { live = false; };
+  }, []);
+
+  const can = (module:string) =>
+    user?.role === 'admin' || permissions.some(p => p.module===module && p.action==='view');
+
+  async function signOut() {
+    if (supabase) await mprLogout(supabase);
+    setUser(null); setPermissions([]); setPage('dashboard');
+  }
+
+  if (!configReady || !supabase) return <SetupScreen />;
+  if (loading) return <div className="loading"><div className="brand-mark">M</div><p>Preparing your workspace…</p></div>;
+  if (!user) return <Login onLogin={(u,p) => { setUser(u); setPermissions(p); setNotice('Welcome back. Your MPR workspace is ready.'); }} />;
+  if (user.must_change_password) return <ChangePassword onDone={async () => { await signOut(); setNotice('Password updated. Please sign in with your new password.'); }} />;
+
+  const allowedNav = nav.filter(n => can(n.module));
+
+  return <div className="shell">
+    <aside className={`sidebar ${mobile?'open':''}`}>
+      <div className="brand"><div className="brand-mark">M</div><div><b>MPR</b><span>EVENT MANAGEMENT</span></div></div>
+      <div className="workspace-label">WORKSPACE</div>
+      <nav>{allowedNav.map(n => <button key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={() => {setPage(n.id);setMobile(false);}}><n.icon size={18}/><span>{n.label}</span>{page===n.id&&<span className="nav-dot"/>}</button>)}</nav>
+      <div className="sidebar-bottom">
+        <div className="secure-note"><LockKeyhole size={16}/><span>Private MPR workspace<br/><small>Custom authentication enabled</small></span></div>
+        <button className="nav-item" onClick={signOut}><LogOut size={18}/><span>Sign out</span></button>
+      </div>
+    </aside>
+    <main className="main">
+      <header className="topbar">
+        <button className="icon-btn mobile-menu" onClick={() => setMobile(!mobile)}><Menu/></button>
+        <div className="crumb">MPR <span>/</span> {nav.find(n=>n.id===page)?.label??'Settings'}</div>
+        <div className="top-actions">
+          <div className="live-pill"><i/> System connected</div>
+          <div className="user-chip"><div className="avatar">{user.full_name.slice(0,1).toUpperCase()}</div><div><b>{user.full_name}</b><small>{user.role}</small></div><ChevronDown size={15}/></div>
+        </div>
+      </header>
+      <section className="content">
+        {notice&&<div className="notice" onClick={() => setNotice('')}>{notice}<button>×</button></div>}
+        <div className="page-heading"><div><div className="eyebrow">MANAGEMENT CONSOLE</div><h1>{pageTitle(page)}</h1><p>{pageSubtitle(page)}</p></div><div className="date-chip"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short',year:'numeric'})}</div></div>
+        {page==='dashboard'&&<Dashboard user={user} onNavigate={setPage}/>}
+        {page==='calendar'&&<MprCalendars supabase={supabase}/>}
+        {page==='users'&&user.role==='admin'&&<UserManagement/>}
+        {page==='lovs'&&user.role==='admin'&&<AdminLovManager supabase={supabase}/>}
+        {!['dashboard','calendar','users','lovs'].includes(page)&&<ComingSoon page={page}/>}
+        {page==='users'&&user.role!=='admin'&&<NoAccess/>}
+        {page==='lovs'&&user.role!=='admin'&&<NoAccess/>}
+        <footer className="footer"><span>© {new Date().getFullYear()} MPR Management</span><span>Secure operations <ShieldCheck size={13}/></span></footer>
+      </section>
+    </main>
+  </div>;
+}
+
+function pageTitle(p:Page) {
+  return ({dashboard:'Good evening',calendar:'Event calendars',bookings:'Bookings',customers:'Customers',venues:'Venue management',auspicious:'Auspicious dates',users:'User access',lovs:'Configuration',reports:'Reports',settings:'Settings'} as any)[p];
+}
+function pageSubtitle(p:Page) {
+  return ({dashboard:'Here is what is happening across your venues today.',calendar:'Track reserved, blocked and auspicious dates across every venue.',bookings:'Create, review and manage event reservations.',customers:'Your customer directory and relationship history.',venues:'Manage locations, availability and venue details.',auspicious:'Maintain important dates for your regions and customers.',users:'Manage MPR accounts, roles and module permissions.',lovs:'Control dropdown values and configurable business lists.',reports:'Review booking activity and operational performance.'} as any)[p];
+}
+function SetupScreen() {
+  return <div className="center-screen"><div className="login-card"><div className="brand-mark">M</div><h1>Connect your MPR project</h1><p>Add your Supabase project URL and publishable/anon key to the environment file.</p><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_ANON_KEY</code><p className="muted">Create <b>.env.local</b> in the project root, then restart the development server.</p></div></div>;
+}
+
+/* Reusable password field with an independent show/hide toggle. */
+function PasswordInput({label,value,onChange,autoComplete,placeholder,minLength,required=true}:{
+  label:string; value:string; onChange:(value:string)=>void; autoComplete?:string;
+  placeholder?:string; minLength?:number; required?:boolean;
+}) {
+  const [visible,setVisible] = useState(false);
+  return <label>{label}
+    <div style={{position:'relative',width:'100%'}}>
+      <input type={visible?'text':'password'} autoComplete={autoComplete} value={value}
+        onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+        minLength={minLength} required={required}
+        style={{width:'100%',paddingRight:'48px'}}/>
+      <button type="button" onClick={()=>setVisible(v=>!v)}
+        aria-label={visible?`Hide ${label.toLowerCase()}`:`Show ${label.toLowerCase()}`}
+        title={visible?'Hide password':'Show password'}
         style={{position:'absolute',right:'12px',top:'50%',transform:'translateY(-50%)',
           border:'none',background:'transparent',cursor:'pointer',padding:'5px',
           display:'flex',alignItems:'center',justifyContent:'center',color:'#64748b'}}>

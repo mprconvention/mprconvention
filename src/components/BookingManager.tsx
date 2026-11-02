@@ -58,7 +58,16 @@ export function BookingManager({supabase,permissions,role}:Props) {
         <label>Booking mode *<select value={draft.booking_mode} onChange={e=>{const mode=e.target.value as Draft["booking_mode"];setDraft(d=>d?{...d,booking_mode:mode,start_time:"",end_time:"",end_date:mode==="time_slot"?d.start_date:d.end_date}:d);}}><option value="full_day">Full day</option><option value="time_slot">Time slot (same day)</option></select></label>
         <label>Start date *<input type="date" required value={draft.start_date} onChange={e=>setDraft(d=>d?{...d,start_date:e.target.value,...(d.booking_mode==="time_slot"?{end_date:e.target.value}:{})}:d)}/></label>
         <label>End date *<input type="date" required min={draft.start_date} disabled={draft.booking_mode==="time_slot"} value={draft.end_date} onChange={e=>update("end_date",e.target.value)}/></label>
-        {draft.booking_mode==="time_slot"&&<><label>Start time *<input type="time" required value={draft.start_time} onChange={e=>update("start_time",e.target.value)}/></label><label>End time *<input type="time" required value={draft.end_time} onChange={e=>update("end_time",e.target.value)}/></label></>}
+        {draft.booking_mode==="time_slot"&&<><label>Start time *<input type="time"
+  required
+  value={draft.start_time ?? ""}
+  onChange={e => update("start_time", e.target.value)}
+/></label><label>End time *<input
+  type="time"
+  required
+  value={draft.end_time ?? ""}
+  onChange={e => update("end_time", e.target.value)}
+/></label></>}
         <label>Booking status *<select value={draft.booking_status} onChange={e=>update("booking_status",e.target.value)}><option value="pending">Pending</option><option value="confirmed">Confirmed</option></select></label>
         <label>Event type code<input value={draft.event_type_code??""} onChange={e=>update("event_type_code",e.target.value)} placeholder="Optional configuration code"/></label>
         <label>Booking source code<input value={draft.booking_source_code??""} onChange={e=>update("booking_source_code",e.target.value)} placeholder="Optional source code"/></label>

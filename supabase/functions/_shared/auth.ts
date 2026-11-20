@@ -31,19 +31,27 @@ export async function authenticate(req: Request) {
   const token = bearer(req);
   if (!token) return { error: "Missing MPR session token" } as const;
   const tokenHash = await sha256(token);
-  const { data: session } = await db.from("mpr_sessions").select("id,user_id,expires_at")
+  const { data: session, error } = await db.from("mpr_sessions")
+    .select("id,user:mpr_users!mpr_sessions_user_id_fkey(id,username,email,full_name,role,is_active,must_change_password,permissions:user_permissions!user_permissions_user_mpr_fk(module,action))")
     .eq("token_hash", tokenHash).gt("expires_at", new Date().toISOString()).maybeSingle();
-  if (!session) return { error: "Session is invalid or expired" } as const;
-  const { data: user } = await db.from("mpr_users")
-    .select("id,username,email,full_name,role,is_active,must_change_password")
-    .eq("id", session.user_id).maybeSingle();
-  if (!user?.is_active) return { error: "User account is inactive" } as const;
-  await db.from("mpr_sessions").update({ last_seen_at: new Date().toISOString(), updated_by: user.id }).eq("id", session.id);
-  const { data: permissions } = await db.from("user_permissions").select("module,action").eq("user_id", user.id);
+  if (error) {
+    console.error("MPR session lookup failed", error.code);
+    return { error: "Session service unavailable", status: 503 } as const;
+  }
+  const account = Array.isArray(session?.user) ? session.user[0] : session?.user;
+  if (!session || !account?.is_active) return { error: "Session is invalid or expired" } as const;
+  const { permissions, ...user } = account;
+  const { data: touched, error: touchError } = await db.from("mpr_sessions")
+    .update({ last_seen_at: new Date().toISOString(), updated_by: user.id })
+    .eq("id", session.id).select("id").maybeSingle();
+  if (touchError) return { error: "Session service unavailable", status: 503 } as const;
+  if (!touched) return { error: "Session is invalid or expired" } as const;
   return { user, permissions: permissions ?? [], sessionId: session.id } as const;
 }
 export function allowed(ctx: { user: any; permissions: any[] }, module: string, action: string) {
+  if (ctx.user.must_change_password) return false;
   if (ctx.user.role === "admin") return true;
+  if (["users", "lovs"].includes(module) || (ctx.user.role === "viewer" && action !== "view")) return false;
   if (ctx.user.role === "manager" && module === "auspicious_dates" && ["view", "create", "edit", "delete"].includes(action)) return true;
   return ctx.permissions.some((p) => p.module === module && p.action === action);
 }

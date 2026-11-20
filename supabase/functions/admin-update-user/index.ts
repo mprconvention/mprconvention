@@ -1,25 +1,30 @@
 import { authenticate, db, reply, corsHeaders } from "../_shared/auth.ts";
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  const ctx = await authenticate(req); if ("error" in ctx) return reply({ error: ctx.error }, 401);
-  if (ctx.user.role !== "admin") return reply({ error: "Administrator access required" }, 403);
-  try {
-    const b = await req.json(); const id = String(b.user_id ?? ""); const role = String(b.role ?? "staff");
-    if (!id || !["manager","staff","viewer"].includes(role)) return reply({ error: "Invalid user or role" }, 400);
-    const { data: target } = await db.from("mpr_users").select("id,role").eq("id", id).maybeSingle();
-    if (!target) return reply({ error: "User not found" }, 404);
-    if (target.role === "admin") return reply({ error: "Administrator accounts can only be changed through a controlled SQL procedure" }, 403);
-    const { error } = await db.from("mpr_users").update({ role, is_active: Boolean(b.is_active), updated_by: ctx.user.id }).eq("id", id);
-    if (error) throw error;
-    await db.from("mpr_sessions").delete().eq("user_id", id);
-    if (!Array.isArray(b.permissions)) return reply({ ok: true });
-    const { error: permissionError } = await db.from("user_permissions").delete().eq("user_id", id);
-    if (permissionError) throw permissionError;
-    const perms = Array.isArray(b.permissions) ? b.permissions : [];
-    const modules = ["dashboard","calendar","bookings","calendar_blocks","customers","venues","auspicious_dates","users","reports","lovs"];
-    const actions = ["view","create","edit","delete"];
-    const rows = perms.filter((p: any) => modules.includes(p.module) && actions.includes(p.action)).map((p: any) => ({ user_id: id, module: p.module, action: p.action, granted_by: ctx.user.id }));
-    if (rows.length) { const { error: pe } = await db.from("user_permissions").insert(rows); if (pe) throw pe; }
-    return reply({ ok: true });
-  } catch (e) { console.error("admin-update-user failed", e); return reply({ error: "Unable to update user" }, 500); }
+  if (req.method !== "POST") return reply({ error: "Method not allowed" }, 405);
+  const ctx = await authenticate(req);
+  if ("error" in ctx) return reply({ error: ctx.error }, ctx.status ?? 401);
+  if (ctx.user.role !== "admin" || ctx.user.must_change_password) {
+    return reply({ error: "Administrator access required" }, 403);
+  }
+
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body.user_id !== "string" ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.user_id)) {
+    return reply({ error: "Valid user ID required" }, 400);
+  }
+  const { error } = await db.rpc("mpr_manage_user", {
+    p_actor: ctx.user.id,
+    p_target: body.user_id,
+    p_changes: { role: body.role, is_active: body.is_active, permissions: body.permissions },
+  });
+  if (!error) return reply({ ok: true });
+  if (error.code === "P0002") return reply({ error: error.message }, 404);
+  if (error.code === "42501") return reply({ error: error.message }, 403);
+  if (["22023", "23502", "23514"].includes(error.code)) {
+    return reply({ error: "Invalid role, activation status or permissions" }, 400);
+  }
+  console.error("admin-update-user failed", error.code);
+  return reply({ error: "Unable to update user" }, 500);
 });

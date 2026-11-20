@@ -15,11 +15,11 @@ Deno.serve(async (req) => {
     if (!user || !user.is_active || !bcrypt.compareSync(password, user.password_hash)) return reply({ error: "Invalid login or password" }, 401);
     const token = makeToken();
     const expires = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
-    const { error } = await db.from("mpr_sessions").insert({ user_id: user.id, token_hash: await sha256(token), expires_at: expires });
+    const { data, error } = await db.rpc("mpr_issue_session", {
+      p_actor: user.id, p_expected_hash: user.password_hash, p_token_hash: await sha256(token), p_expires: expires,
+    });
+    if (error?.code === "42501") return reply({ error: "Invalid login or password" }, 401);
     if (error) throw error;
-    await db.from("mpr_users").update({ last_login_at: new Date().toISOString(), updated_by: user.id }).eq("id", user.id);
-    const { data: permissions } = await db.from("user_permissions").select("module,action").eq("user_id", user.id);
-    delete user.password_hash;
-    return reply({ token, expires_at: expires, user, permissions: permissions ?? [] });
+    return reply({ token, expires_at: expires, ...data });
   } catch (e) { console.error("mpr-login failed", e); return reply({ error: "Login service unavailable" }, 500); }
 });

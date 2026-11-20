@@ -1,149 +1,102 @@
-import { bookingTimeRange } from "../lib/bookingPicklists";
-import { auditFields } from "../lib/recordAudit";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  getThreeCalendars,
-  getActiveVenues,
-  type CalendarEntry,
-  type AuspiciousDate,
-} from "../lib/mprCalendars";
+import { bookingTimeRange } from "../lib/bookingPicklists";
+import { getActiveVenues, getAvailability } from "../lib/mprCalendars";
 
-type Venue = { id: string; venue_name: string; timezone: string };
+type Venues = Awaited<ReturnType<typeof getActiveVenues>>;
+type Availability = Awaited<ReturnType<typeof getAvailability>>;
+const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export function MprCalendars({ supabase }: { supabase: SupabaseClient }) {
-  const [venues, setVenues] = useState<Venue[]>([]);
+  const [venues, setVenues] = useState<Venues>([]);
   const [venueId, setVenueId] = useState("");
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [reserved, setReserved] = useState<CalendarEntry[]>([]);
-  const [blocked, setBlocked] = useState<CalendarEntry[]>([]);
-  const [auspicious, setAuspicious] = useState<AuspiciousDate[]>([]);
+  const [month, setMonth] = useState(() => new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit",
+  }).format(new Date()));
+  const [availability, setAvailability] = useState<Availability | null>(null);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getActiveVenues(supabase)
-      .then((rows) => {
-        setVenues(rows as Venue[]);
-        if (rows.length) setVenueId(rows[0].id);
-      })
-      .catch((e) => setError(e.message));
+    let current = true;
+    getActiveVenues(supabase).then(rows => {
+      if (!current) return;
+      setVenues(rows);
+      setVenueId(rows[0]?.id ?? "");
+    }).catch(e => {
+      if (current) setError(e.message);
+    }).finally(() => {
+      if (current) setLoading(false);
+    });
+    return () => { current = false; };
   }, [supabase]);
 
   useEffect(() => {
     if (!venueId) return;
-    let cancelled = false;
-    setLoading(true);
+    let current = true;
+    setAvailability(null);
     setError("");
-    getThreeCalendars(supabase, venueId, month)
-      .then((result) => {
-        if (cancelled) return;
-        setReserved(result.reserved);
-        setBlocked(result.blocked);
-        setAuspicious(result.auspicious);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
+    setLoading(true);
+    async function load() {
+      try {
+        const data = await getAvailability(supabase, venueId, month);
+        if (current) { setAvailability(data); setError(""); }
+      } catch (e: any) {
+        if (current) { setError(e.message); setAvailability(null); }
+      } finally {
+        if (current) setLoading(false);
+      }
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), 30_000);
+    return () => { current = false; window.clearInterval(timer); };
   }, [supabase, venueId, month]);
 
-  const days = useMemo(() => {
-    const [year, monthNo] = month.split("-").map(Number);
-    const first = new Date(year, monthNo - 1, 1);
-    const count = new Date(year, monthNo, 0).getDate();
-    const offset = first.getDay();
-    return [
-      ...Array.from({ length: offset }, () => null),
-      ...Array.from({ length: count }, (_, i) => i + 1),
-    ];
-  }, [month]);
+  const [year, monthNumber] = month.split("-").map(Number);
+  const firstDay = new Date(year, monthNumber - 1, 1);
+  const weekdayOffset = firstDay.getDay();
+  const daysInMonth = new Date(year, monthNumber, 0).getDate();
+  function shiftMonth(delta: number) {
+    const date = new Date(year, monthNumber - 1 + delta, 1);
+    setMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`);
+  }
 
-  const shiftMonth = (delta: number) => {
-    const [year, monthNo] = month.split("-").map(Number);
-    const d = new Date(year, monthNo - 1 + delta, 1);
-    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-  };
-
-  const [year, monthNo] = month.split("-").map(Number);
-  const monthLabel = new Date(year, monthNo - 1, 1)
-    .toLocaleDateString(undefined, { month: "long", year: "numeric" });
-
-  return (
-    <section>
-      <h2>MPR Event Calendars</h2>
-      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-        <label>Venue{" "}
-          <select value={venueId} onChange={(e) => setVenueId(e.target.value)}>
-            {venues.map((v) => <option key={v.id} value={v.id}>{v.venue_name}</option>)}
-          </select>
-        </label>
-        <button type="button" onClick={() => shiftMonth(-1)}>Previous</button>
-        <strong>{monthLabel}</strong>
-        <button type="button" onClick={() => shiftMonth(1)}>Next</button>
-        <input aria-label="Choose month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+  return <section>
+    <div className="availability-controls">
+      <label>Venue <select value={venueId} onChange={e => setVenueId(e.target.value)}>
+        {venues.map(venue => <option key={venue.id} value={venue.id}>{venue.venue_name}</option>)}
+      </select></label>
+      <button className="outline-btn" type="button" onClick={() => shiftMonth(-1)}>Previous month</button>
+      <input aria-label="Choose month" type="month" value={month}
+        onChange={e => { if (/^[1-9]\d{3}-\d{2}$/.test(e.target.value)) setMonth(e.target.value); }} />
+      <button className="outline-btn" type="button" onClick={() => shiftMonth(1)}>Next month</button>
+    </div>
+    {error && <div className="error-box" role="alert">{error}</div>}
+    {loading && <p role="status">Loading availability…</p>}
+    {!error && !loading && !venueId && <p>No active venues.</p>}
+    {availability && <article className="availability-calendar" aria-label="Venue availability">
+      <h2>{firstDay.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h2>
+      <div className="availability-grid">
+        {weekdays.map(day => <strong key={day} className="availability-weekday">{day}</strong>)}
+        {Array.from({ length: weekdayOffset }, (_, index) => <div key={`blank-${index}`} />)}
+        {Array.from({ length: daysInMonth }, (_, index) => {
+          const day = index + 1;
+          const date = `${month}-${String(day).padStart(2, "0")}`;
+          const occupied = availability.entries.filter(entry => entry.start_date <= date && entry.end_date >= date);
+          const occasions = availability.auspicious.filter(entry => entry.date === date);
+          return <div className="availability-day" key={date}>
+            <strong>{day}</strong>
+            {occupied.length === 0 && <span className="availability-free">Available</span>}
+            {occupied.map(entry => (
+              <div key={entry.id} className={`availability-slot ${entry.is_hold ? "hold" : entry.entry_type}`}>
+                <b>{entry.is_hold ? "On hold" : entry.entry_type === "blocked" ? "Blocked" : "Reserved"}</b>
+                <span>{entry.booking_mode === "time_slot" ? bookingTimeRange(entry.start_time, entry.end_time) : "All day"}</span>
+              </div>
+            ))}
+            {occasions.map(entry => <div className="availability-occasion" key={entry.id}>{entry.title}</div>)}
+          </div>;
+        })}
       </div>
-
-      <p style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-        <span>🟢 Reserved</span><span>🔴 Blocked</span><span>🟡 Auspicious</span>
-      </p>
-      {error && <p role="alert">{error}</p>}
-      {loading && <p>Loading calendars…</p>}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 16 }}>
-        <MonthCalendar title="Reserved Calendar" color="#16834d" month={month} days={days} entries={reserved} auspicious={[]} />
-        <MonthCalendar title="Blocked Calendar" color="#c24141" month={month} days={days} entries={blocked} auspicious={[]} />
-        <MonthCalendar title="Auspicious Calendar" color="#b7791f" month={month} days={days} entries={[]} auspicious={auspicious} />
-      </div>
-    </section>
-  );
-}
-
-function MonthCalendar({
-  title, color, month, days, entries, auspicious,
-}: {
-  title: string;
-  color: string;
-  month: string;
-  days: Array<number | null>;
-  entries: CalendarEntry[];
-  auspicious: AuspiciousDate[];
-}) {
-  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const [year, monthNo] = month.split("-").map(Number);
-
-  const dayItems = (day: number) => {
-    const dateKey = `${year}-${String(monthNo).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    const matchingEntries = entries.filter((e) => e.start_date <= dateKey && e.end_date >= dateKey);
-    const matchingAuspicious = auspicious.filter((a) => a.date === dateKey);
-    return (
-      <div style={{ fontSize: 11, marginTop: 4 }}>
-        {matchingEntries.map((e) => (
-          <div key={e.id} title={[e.event_name ?? e.block_reason_code ?? "", ...auditFields(e).map(([label, value]) => `${label}: ${value}`)].join("\n")}>
-            {e.booking_mode === "time_slot" ? bookingTimeRange(e.start_time, e.end_time) : "All day"}
-          </div>
-        ))}
-        {matchingAuspicious.map((a) => <div key={a.id} title={[a.title, ...auditFields(a).map(([label, value]) => `${label}: ${value}`)].join("\n")}>✦ {a.title}</div>)}
-      </div>
-    );
-  };
-
-  return (
-    <article style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
-      <h3 style={{ color, marginTop: 0 }}>{title}</h3>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 3 }}>
-        {weekday.map((d) => <div key={d} style={{ textAlign: "center", fontWeight: 700, fontSize: 12 }}>{d}</div>)}
-        {days.map((day, i) => day === null
-          ? <div key={`empty-${i}`} />
-          : <div key={day} style={{ minHeight: 72, border: "1px solid #eee", borderRadius: 5, padding: 4, overflowWrap: "anywhere" }}>
-              <strong>{day}</strong>
-              {dayItems(day)}
-            </div>
-        )}
-      </div>
-    </article>
-  );
+    </article>}
+  </section>;
 }

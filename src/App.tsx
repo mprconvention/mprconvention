@@ -1,26 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   Activity, CalendarDays, Users, Building2, ClipboardList, Settings, LogOut,
   Menu, Search, ChevronDown, ArrowUpRight, ShieldCheck, LockKeyhole,
-  LayoutDashboard, CalendarCheck, CalendarX, Star, KeyRound, Eye, EyeOff, History
+  LayoutDashboard, CalendarCheck, CalendarX, Star, KeyRound, Eye, EyeOff, History, ListChecks
 } from 'lucide-react';
 import { supabase, configReady } from './lib/supabase';
 import {
-  getMprToken, mprLogin, mprLogout, mprInvoke, mprChangePassword, type MprUser
+  getMprToken, setMprToken, mprLogin, mprLogout, mprInvoke, mprChangePassword, type MprUser
 } from './lib/mprAuth';
 import { MprCalendars } from './components/MprCalendars';
 import { AdminLovManager } from './components/AdminLovManager';
 import { UserManagement } from './components/UserManagement';
 import { MasterDataManager } from './components/MasterDataManager';
 import { BookingManager } from './components/BookingManager';
+import { BookingWorkflow, type WorkflowBooking } from './components/BookingWorkflow';
 import { ChangeHistory } from './components/ChangeHistory';
 
-type Page = 'dashboard'|'calendar'|'bookings'|'customers'|'venues'|'auspicious'|'users'|'lovs'|'history'|'reports'|'settings';
+type Page = 'dashboard'|'calendar'|'bookings'|'workflow'|'customers'|'venues'|'auspicious'|'users'|'lovs'|'history'|'reports'|'settings';
 
 const nav: {id: Page; label: string; icon: any; module: string}[] = [
   {id:'dashboard',label:'Dashboard',icon:LayoutDashboard,module:'dashboard'},
-  {id:'calendar',label:'Event calendars',icon:CalendarDays,module:'calendar'},
+  {id:'calendar',label:'Venue availability',icon:CalendarDays,module:'calendar'},
   {id:'bookings',label:'Bookings',icon:ClipboardList,module:'bookings'},
+  {id:'workflow',label:'Booking workflow',icon:ListChecks,module:'booking_workflow'},
   {id:'customers',label:'Customers',icon:Users,module:'customers'},
   {id:'venues',label:'Venues',icon:Building2,module:'venues'},
   {id:'auspicious',label:'Auspicious dates',icon:Star,module:'auspicious_dates'},
@@ -33,7 +36,8 @@ const nav: {id: Page; label: string; icon: any; module: string}[] = [
 export default function App() {
   const [user,setUser] = useState<MprUser|null>(null);
   const [permissions,setPermissions] = useState<{module:string;action:string}[]>([]);
-  const [page,setPage] = useState<Page>('dashboard');
+  const [selectedPage,setPage] = useState<Page>('dashboard');
+  const [workflowBooking, setWorkflowBooking] = useState<WorkflowBooking | null>(null);
   const [loading,setLoading] = useState(true);
   const [mobile,setMobile] = useState(false);
   const [notice,setNotice] = useState('');
@@ -49,7 +53,7 @@ export default function App() {
         const r = await mprInvoke<{user:MprUser;permissions:{module:string;action:string}[]}>(supabase,'mpr-me',{});
         if (live) { setUser(r.user); setPermissions(r.permissions??[]); }
       } catch {
-        if (live) sessionStorage.removeItem('mpr_session_token');
+        if (live) setMprToken(null);
       } finally {
         if (live) setLoading(false);
       }
@@ -88,11 +92,17 @@ export default function App() {
   }, [mobile]);
 
   const can = (module:string) =>
-    user?.role === 'admin' || permissions.some(p => p.module===module && p.action==='view');
+    user?.role === 'admin' || (
+      !['users','lovs','audit_logs'].includes(module) &&
+      ((user?.role === 'manager' && module === 'auspicious_dates') ||
+        permissions.some(p => p.module === module && p.action === 'view'))
+    );
+  const canWriteWorkflow = (action: string) => user?.role === 'admin' || (user?.role !== 'viewer' &&
+    permissions.some(p => p.module === 'booking_workflow' && p.action === action));
 
   async function signOut() {
     if (supabase) await mprLogout(supabase);
-    setMobile(false); setUser(null); setPermissions([]); setPage('dashboard');
+    setMobile(false); setUser(null); setPermissions([]); setPage('dashboard'); setWorkflowBooking(null);
   }
 
   if (!configReady || !supabase) return <SetupScreen />;
@@ -100,7 +110,8 @@ export default function App() {
   if (!user) return <Login onLogin={(u,p) => { setUser(u); setPermissions(p); setNotice('Welcome back. Your MPR workspace is ready.'); }} />;
   if (user.must_change_password) return <ChangePassword onDone={async () => { await signOut(); setNotice('Password updated. Please sign in with your new password.'); }} />;
 
-  const allowedNav = nav.filter(n => n.id === 'history' ? user.role === 'admin' : can(n.module));
+  const allowedNav = nav.filter(n => can(n.module) || (n.id === 'bookings' && can('calendar_blocks')));
+  const page = allowedNav.some(n => n.id === selectedPage) ? selectedPage : allowedNav[0]?.id;
 
   return <div className="shell">
     {mobile && <button type="button" className="mobile-menu-backdrop" tabIndex={-1}
@@ -108,7 +119,7 @@ export default function App() {
     <aside ref={sidebar} id="app-sidebar" tabIndex={-1} className={`sidebar ${mobile?'open':''}`}>
       <div className="brand"><img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><div><b>MPR</b><span>EVENT MANAGEMENT</span></div></div>
       <div className="workspace-label">WORKSPACE</div>
-      <nav>{allowedNav.map(n => <button key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={() => {setPage(n.id);setMobile(false);}}><n.icon size={18}/><span>{n.label}</span>{page===n.id&&<span className="nav-dot"/>}</button>)}</nav>
+      <nav>{allowedNav.map(n => <button key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={() => {setPage(n.id);setMobile(false);if(n.id==='workflow')setWorkflowBooking(null);}}><n.icon size={18}/><span>{n.label}</span>{page===n.id&&<span className="nav-dot"/>}</button>)}</nav>
       <div className="sidebar-bottom">
         <div className="secure-note"><LockKeyhole size={16}/><span>Private MPR workspace<br/><small>Custom authentication enabled</small></span></div>
         <button className="nav-item" onClick={signOut}><LogOut size={18}/><span>Sign out</span></button>
@@ -122,24 +133,26 @@ export default function App() {
         <div className="crumb">MPR <span>/</span> {nav.find(n=>n.id===page)?.label??'Settings'}</div>
         <div className="top-actions">
           <div className="live-pill"><i/> System connected</div>
-          <div className="user-chip"><div className="avatar">{user.full_name.slice(0,1).toUpperCase()}</div><div><b>{user.full_name}</b><small>{user.role}</small></div><ChevronDown size={15}/></div>
+          <div className="user-chip"><div className="avatar">{user.full_name.slice(0,1).toUpperCase()}</div><div><b>{user.full_name}</b><small>{user.role === "staff" ? "Team" : user.role}</small></div><ChevronDown size={15}/></div>
         </div>
       </header>
       <section className="content">
         {notice&&<div className="notice" onClick={() => setNotice('')}>{notice}<button>×</button></div>}
-        <div className="page-heading"><div><div className="eyebrow">MANAGEMENT CONSOLE</div><h1>{pageTitle(page)}</h1><p>{pageSubtitle(page)}</p></div><div className="date-chip"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short',year:'numeric'})}</div></div>
-        {page==='dashboard'&&<Dashboard user={user} onNavigate={setPage}/>}
+        {page && <div className="page-heading"><div><div className="eyebrow">MANAGEMENT CONSOLE</div><h1>{pageTitle(page)}</h1><p>{pageSubtitle(page)}</p></div><div className="date-chip"><CalendarDays size={16}/>{new Date().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short',year:'numeric'})}</div></div>}
+        {page==='dashboard'&&<Dashboard user={user} supabase={supabase} pages={allowedNav.map(n => n.id)} onNavigate={setPage}/>}
         {page==='calendar'&&<MprCalendars supabase={supabase}/>}
-        {page==='bookings'&&<BookingManager supabase={supabase} permissions={permissions} role={user.role}/>}
+        {page==='bookings'&&<BookingManager supabase={supabase} permissions={permissions} role={user.role}
+          onWorkflow={can('booking_workflow') && can('bookings') ? booking => { setWorkflowBooking(booking); setPage('workflow'); } : undefined}/>}
+        {page==='workflow'&&<BookingWorkflow supabase={supabase} booking={workflowBooking}
+          canCreate={canWriteWorkflow('create')} canEdit={canWriteWorkflow('edit')} clearBooking={()=>setWorkflowBooking(null)}/>}
         {page==='users'&&user.role==='admin'&&<UserManagement/>}
         {page==='lovs'&&user.role==='admin'&&<AdminLovManager supabase={supabase}/>}
         {page==='history'&&user.role==='admin'&&<ChangeHistory supabase={supabase}/>}
         {page==='customers'&&<MasterDataManager module="customers" supabase={supabase} permissions={permissions} role={user.role}/>}
         {page==='venues'&&<MasterDataManager module="venues" supabase={supabase} permissions={permissions} role={user.role}/>}
         {page==='auspicious'&&<MasterDataManager module="auspicious_dates" supabase={supabase} permissions={permissions} role={user.role}/>}
-        {!['dashboard','calendar','bookings','users','lovs','history','customers','venues','auspicious'].includes(page)&&<ComingSoon page={page}/>}
-        {page==='users'&&user.role!=='admin'&&<NoAccess/>}
-        {(page==='lovs'||page==='history')&&user.role!=='admin'&&<NoAccess/>}
+        {page==='reports'&&<ComingSoon page={page}/>}
+        {!page&&<div className="module-placeholder"><h2>No workspace access</h2><p>Ask your administrator to grant access to the modules you need.</p></div>}
         <footer className="footer"><span>© {new Date().getFullYear()} MPR Management</span><span>Secure operations <ShieldCheck size={13}/></span></footer>
       </section>
     </main>
@@ -147,10 +160,10 @@ export default function App() {
 }
 
 function pageTitle(p:Page) {
-  return ({dashboard:'Good evening',calendar:'Event calendars',bookings:'Bookings',customers:'Customers',venues:'Venue management',auspicious:'Auspicious dates',users:'User access',lovs:'Configuration',history:'Change history',reports:'Reports',settings:'Settings'} as any)[p];
+  return ({dashboard:'Dashboard',calendar:'Venue availability',bookings:'Bookings',workflow:'Booking workflow',customers:'Customers',venues:'Venue management',auspicious:'Auspicious dates',users:'User access',lovs:'Configuration',history:'Change history',reports:'Reports',settings:'Settings'} as any)[p];
 }
 function pageSubtitle(p:Page) {
-  return ({dashboard:'Here is what is happening across your venues today.',calendar:'Track reserved, blocked and auspicious dates across every venue.',bookings:'Create, review and manage event reservations.',customers:'Your customer directory and relationship history.',venues:'Manage locations, availability and venue details.',auspicious:'Maintain important dates for your regions and customers.',users:'Manage MPR accounts, roles and module permissions.',lovs:'Control dropdown values and configurable business lists.',history:'Review record changes and their previous values.',reports:'Review booking activity and operational performance.'} as any)[p];
+  return ({dashboard:'Here is what is happening across your venues today.',calendar:'See reservations, venue blocks, holds, and auspicious dates in one calendar.',bookings:'Create, review and manage event reservations.',workflow:'Track inquiries, quotes, deposits, reminders and event-day instructions.',customers:'Your customer directory and relationship history.',venues:'Manage locations, availability and venue details.',auspicious:'Maintain important dates for your regions and customers.',users:'Manage MPR accounts, roles and module permissions.',lovs:'Control dropdown values and configurable business lists.',history:'Review record changes and their previous values.',reports:'Review booking activity and operational performance.'} as any)[p];
 }
 function SetupScreen() {
   return <div className="center-screen"><div className="login-card"><img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><h1>Connect your MPR project</h1><p>Add your Supabase project URL and publishable/anon key to the environment file.</p><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_ANON_KEY</code><p className="muted">Create <b>.env.local</b> in the project root, then restart the development server.</p></div></div>;
@@ -247,23 +260,44 @@ function ChangePassword({onDone}:{onDone:()=>void}) {
   </form></div>;
 }
 
-function Dashboard({user,onNavigate}:{user:MprUser;onNavigate:(p:Page)=>void}) {
+type DashboardCounts = Partial<Record<"reserved" | "blocked" | "holds" | "auspicious" | "venues", number>>;
+
+function Dashboard({user,supabase,pages,onNavigate}:{
+  user: MprUser; supabase: SupabaseClient; pages: Page[]; onNavigate: (page: Page) => void;
+}) {
+  const [counts, setCounts] = useState<DashboardCounts>({});
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let current = true;
+    async function load() {
+      try {
+        const result = await mprInvoke<{data: DashboardCounts}>(supabase, "mpr-api", {action: "get-dashboard-counts"});
+        if (current) { setCounts(result.data); setError(""); }
+      } catch (e: any) {
+        if (current) { setCounts({}); setError(e.message ?? "Unable to load dashboard counts."); }
+      }
+    }
+    void load();
+    const interval = window.setInterval(() => void load(), 30_000);
+    return () => { current = false; window.clearInterval(interval); };
+  }, [supabase]);
+
   return <>
-    <div className="welcome-strip"><div><div className="eyebrow">YOUR OPERATIONS AT A GLANCE</div><h2>Welcome, {user.full_name.split(' ')[0]} <span>✦</span></h2><p>Keep your venues running smoothly. Your next event starts with a clear plan.</p></div><div className="welcome-icon"><CalendarCheck size={32}/></div></div>
+    <div className="welcome-strip"><h2>Welcome, {user.full_name.split(' ')[0]}</h2><div className="welcome-icon"><CalendarCheck size={32}/></div></div>
+    {error && <div className="error-box" role="alert">{error}</div>}
     <div className="stat-grid">
-      <Stat icon={CalendarCheck} label="Reserved dates" value="—" note="Live booking summary pending API" tone="green"/>
-      <Stat icon={CalendarX} label="Blocked dates" value="—" note="Live availability summary pending API" tone="red"/>
-      <Stat icon={Star} label="Auspicious dates" value="—" note="View the calendar for date details" tone="gold"/>
-      <Stat icon={Building2} label="Active venues" value="—" note="Venue summary pending API" tone="blue"/>
+      {counts.reserved !== undefined && <Stat icon={CalendarCheck} label="Reservations" value={counts.reserved} note="Upcoming and in progress" tone="green"/>}
+      {counts.blocked !== undefined && <Stat icon={CalendarX} label="Venue blocks" value={counts.blocked} note="Upcoming and in progress" tone="red"/>}
+      {counts.holds !== undefined && <Stat icon={CalendarDays} label="Temporary holds" value={counts.holds} note="Unexpired holds for current or future slots" tone="gold"/>}
+      {counts.auspicious !== undefined && <Stat icon={Star} label="Auspicious dates" value={counts.auspicious} note="Today and upcoming" tone="gold"/>}
+      {counts.venues !== undefined && <Stat icon={Building2} label="Active venues" value={counts.venues} note="Available to schedule" tone="blue"/>}
     </div>
-    <div className="section-row"><div><h3>Quick access</h3><p>Jump into the areas you use most.</p></div><span className="section-caption">YOUR WORKSPACE</span></div>
     <div className="quick-grid">
-      <Quick icon={CalendarDays} title="Event calendars" desc="Reserved, blocked and auspicious dates" onClick={()=>onNavigate('calendar')}/>
-      <Quick icon={ClipboardList} title="Bookings" desc="Manage event reservations" onClick={()=>onNavigate('bookings')}/>
-      <Quick icon={Users} title="Customers" desc="Customer records and details" onClick={()=>onNavigate('customers')}/>
-      <Quick icon={Building2} title="Venues" desc="Your locations and spaces" onClick={()=>onNavigate('venues')}/>
+      {pages.includes("calendar") && <Quick icon={CalendarDays} title="Venue availability" desc="Reserved, blocked and held periods" onClick={()=>onNavigate('calendar')}/>}
+      {pages.includes("bookings") && <Quick icon={ClipboardList} title="Bookings" desc="Manage event reservations" onClick={()=>onNavigate('bookings')}/>}
+      {pages.includes("customers") && <Quick icon={Users} title="Customers" desc="Customer records and details" onClick={()=>onNavigate('customers')}/>}
+      {pages.includes("venues") && <Quick icon={Building2} title="Venues" desc="Your locations and spaces" onClick={()=>onNavigate('venues')}/>}
     </div>
-    <div className="info-banner"><ShieldCheck size={18}/><div><b>Role-based access is active</b><span>Your {user.role} account only sees modules it is permitted to access.</span></div></div>
   </>;
 }
 function Stat({icon:Icon,label,value,note,tone}:any) {
@@ -282,7 +316,4 @@ function ComingSoon({page}:{page:Page}) {
     <button className="outline-btn" onClick={()=>setQuery(query?'':'show')}>{query?'Hide integration note':'What needs to be connected?'}</button>
     {query&&<div className="note-panel">Next backend work: add permission-checked actions to <b>supabase/functions/mpr-api/index.ts</b> for this module, validate all inputs server-side, then connect the corresponding forms and tables.</div>}
   </div>;
-}
-function NoAccess() {
-  return <div className="module-placeholder"><ShieldCheck size={28}/><h2>Administrator access required</h2><p>Your current account does not have access to this module.</p></div>;
 }

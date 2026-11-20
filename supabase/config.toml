@@ -1,5 +1,11 @@
 project_id = "mpr-project"
 
+[db]
+major_version = 17
+
+[db.seed]
+enabled = false
+
 [functions.mpr-login]
 verify_jwt = false
 [functions.mpr-me]

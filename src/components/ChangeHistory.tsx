@@ -5,6 +5,7 @@ import { formatAuditDate } from "../lib/recordAudit";
 
 const modules: Record<string, string> = {
   calendar_entries: "Bookings and blocks",
+  booking_workflow_items: "Booking workflow",
   customers: "Customers",
   venues: "Venues",
   auspicious_dates: "Auspicious dates",
@@ -98,8 +99,8 @@ export function ChangeHistory({ supabase }: { supabase: SupabaseClient }) {
                 <thead><tr><th>Field</th><th>Previous</th><th>New</th></tr></thead>
                 <tbody>{entry.changes.map(change => <tr key={change.field}>
                   <td>{change.field.replaceAll("_", " ")}</td>
-                  <td>{String(change.previous ?? "—")}</td>
-                  <td>{String(change.current ?? "—")}</td>
+                  <td>{change.field === "role" && change.previous === "staff" ? "Team" : String(change.previous ?? "-")}</td>
+                  <td>{change.field === "role" && change.current === "staff" ? "Team" : String(change.current ?? "-")}</td>
                 </tr>)}</tbody>
               </table>
             </details> : "No tracked field differences"}</td>

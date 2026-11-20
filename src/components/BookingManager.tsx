@@ -4,14 +4,15 @@ import {
 } from "../lib/bookingPicklists";
 import { getLovLabels, getLovValues, type LovOption } from "../lib/mprCalendars";
 import { BookingDetails } from "./BookingDetails";
+import type { WorkflowBooking } from "./BookingWorkflow";
 import { PicklistSelect } from "./PicklistSelect";
 import { AuditCells, AuditHeaders } from "./RecordAudit";
 import type { RecordAudit } from "../lib/recordAudit";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  Plus, Search, RefreshCw, Pencil, X, Save, Ban, Eye
+  Plus, Search, RefreshCw, Pencil, X, Save, Ban, Eye, ListChecks
 } from "lucide-react";
 import { mprInvoke } from "../lib/mprAuth";
 
@@ -20,8 +21,8 @@ type Permission = { module: string; action: string };
 type Customer = {
   id: string;
   customer_name: string;
-  mobile: string | null;
-  email: string | null;
+  mobile?: string | null;
+  email?: string | null;
 };
 
 type Venue = {
@@ -34,6 +35,8 @@ type EntryStatus = "pending" | "confirmed" | "blocked";
 
 type Booking = RecordAudit & {
   id: string;
+  revision: number;
+  hold_expires_at: string | null;
   venue_id: string;
   customer_id: string | null;
   event_name: string;
@@ -58,6 +61,9 @@ type Booking = RecordAudit & {
 
 type Draft = {
   id?: string;
+  revision?: number;
+  hold_expires_at?: string | null;
+  hold_minutes?: string;
   venue_id: string;
   customer_id: string;
   event_name: string;
@@ -79,6 +85,7 @@ type Props = {
   supabase: SupabaseClient;
   permissions: Permission[];
   role: string;
+  onWorkflow?: (booking: WorkflowBooking) => void;
 };
 
 const blank = (): Draft => ({
@@ -99,8 +106,21 @@ const blank = (): Draft => ({
   notes: ""
 });
 
+const blankCustomer = () => ({ customer_name: "", mobile: "", email: "", customer_category_code: "" });
+
 function statusCode(row: Booking) {
   return row.entry_status_code ?? (row.entry_type === "blocked" ? "blocked" : row.booking_status ?? "pending");
+}
+
+function holdExpired(row: Booking) {
+  return !!row.hold_expires_at && Date.parse(row.hold_expires_at) <= Date.now();
+}
+
+function statusLabel(row: Booking, options: LovOption[]) {
+  if (holdExpired(row)) return "Expired";
+  if (row.status !== "active") return "Cancelled";
+  if (row.hold_expires_at) return "On hold";
+  return optionLabel(options, statusCode(row), "entry_statuses");
 }
 
 function optionLabel(options: LovOption[], code: string, listCode: string) {
@@ -131,13 +151,17 @@ const today = () =>
 export function BookingManager({
   supabase,
   permissions,
-  role
+  role,
+  onWorkflow
 }: Props) {
-  const can = (action: string) =>
-    role === "admin" ||
-    permissions.some(
-      p => p.module === "bookings" && p.action === action
-    );
+  const can = (action: string, type: "reserved" | "blocked") =>
+    role === "admin" || (role !== "viewer" && permissions.some(
+      p => p.module === (type === "blocked" ? "calendar_blocks" : "bookings") && p.action === action
+    ));
+
+  const canCreate = can("create", "reserved") || can("create", "blocked");
+  const canCreateCustomer = role === "admin" || (role !== "viewer" &&
+    permissions.some(p => p.module === "customers" && p.action === "create"));
 
   const [entryStatuses, setEntryStatuses] = useState<LovOption[]>([]);
   const [bookingModes, setBookingModes] = useState<LovOption[]>([]);
@@ -149,6 +173,19 @@ export function BookingManager({
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const details = rows.find(row => row.id === detailsId);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerError, setCustomerError] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [customerDraft, setCustomerDraft] = useState<ReturnType<typeof blankCustomer> | null>(null);
+  const [customerSaving, setCustomerSaving] = useState(false);
+  const [customerCreateError, setCustomerCreateError] = useState("");
+  const [customerSearching, setCustomerSearching] = useState(false);
+  const customerEmail = useRef<HTMLInputElement>(null);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const loadVersion = useRef(0);
+  const [saving, setSaving] = useState(false);
+  const [writeError, setWriteError] = useState("");
   const [venues, setVenues] = useState<Venue[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const draftMode = bookingModes.find(option => option.value_code === draft?.booking_mode_code);
@@ -175,8 +212,15 @@ export function BookingManager({
     }
   }, [supabase]);
 
-  const defaultStatus = entryStatuses.find(option => isActiveOption(option, "entry_statuses") && option.value_code === "pending")
-    ?? entryStatuses.find(option => isActiveOption(option, "entry_statuses"));
+  const original = rows.find(row => row.id === draft?.id);
+  const statusOptions = entryStatuses.filter(option => {
+    const type = option.extra_data?.behavior === "blocked" ? "blocked" : "reserved";
+    if (!draft?.id) return can("create", type);
+    if (!can("edit", type)) return false;
+    return type === original?.entry_type || (!!original && can("delete", original.entry_type) && can("create", type));
+  });
+  const defaultStatus = statusOptions.find(option => isActiveOption(option, "entry_statuses") && option.value_code === "pending")
+    ?? statusOptions.find(option => isActiveOption(option, "entry_statuses"));
   const defaultMode = bookingModes.find(option => isActiveOption(option, "booking_modes") && option.value_code === "full_day")
     ?? bookingModes.find(option => isActiveOption(option, "booking_modes"));
 
@@ -192,91 +236,85 @@ export function BookingManager({
   }, [supabase]);
 
   const load = useCallback(async () => {
+    const version = ++loadVersion.current;
     setBusy(true);
     setError("");
-
     try {
-      const [b, c, v] = await Promise.all([
-        mprInvoke<{ data: Booking[] }>(
-          supabase,
-          "mpr-api",
-          { action: "list-bookings" }
-        ),
-        mprInvoke<{ data: Customer[] }>(
-          supabase,
-          "mpr-api",
-          { action: "list-booking-customers" }
-        ),
-        mprInvoke<{ data: Venue[] }>(
-          supabase,
-          "mpr-api",
-          { action: "get-active-venues" }
-        )
-      ]);
-
-      const customerMap = new Map(
-        (c.data ?? []).map(x => [x.id, x.customer_name])
+      const result = await mprInvoke<{ data: Booking[]; has_more: boolean }>(
+        supabase, "mpr-api", { action: "list-bookings", query, page }
       );
-
-      const venueMap = new Map(
-        (v.data ?? []).map(x => [x.id, x.venue_name])
-      );
-
-      setCustomers(c.data ?? []);
-      setVenues(v.data ?? []);
-
-      setRows(
-        (b.data ?? []).map(x => ({
-          ...x,
-          customer_name: x.customer_id
-            ? customerMap.get(x.customer_id) ?? "Unknown customer"
-            : "—",
-          venue_name: venueMap.get(x.venue_id) ?? "Unknown venue"
-        }))
-      );
+      if (version !== loadVersion.current) return;
+      setRows(result.data);
+      setHasMore(result.has_more);
+      if (page > 0 && !result.data.length) setPage(page - 1);
     } catch (e: any) {
-      setError(e.message ?? "Unable to load bookings.");
+      if (version === loadVersion.current) setError(e.message ?? "Unable to load bookings.");
     } finally {
-      setBusy(false);
+      if (version === loadVersion.current) setBusy(false);
+    }
+  }, [supabase, query, page]);
+
+  const loadVenues = useCallback(async () => {
+    try {
+      const result = await mprInvoke<{ data: Venue[] }>(supabase, "mpr-api", { action: "get-active-venues" });
+      setVenues(result.data);
+    } catch (e: any) {
+      setError(e.message ?? "Unable to load venues.");
     }
   }, [supabase]);
 
   useEffect(() => {
-    void load();
+    const timer = window.setTimeout(() => void load(), query ? 250 : 0);
+    return () => { window.clearTimeout(timer); loadVersion.current++; };
+  }, [load, query]);
+
+  useEffect(() => {
     void loadPicklists();
     void loadFieldLabels();
-  }, [load, loadPicklists, loadFieldLabels]);
+    void loadVenues();
+  }, [loadPicklists, loadFieldLabels, loadVenues]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-
-    return q
-      ? rows.filter(x =>
-          [
-            x.event_name,
-            x.customer_name,
-            x.venue_name,
-            x.booking_status,
-            optionLabel(entryStatuses, statusCode(x), "entry_statuses"),
-            optionLabel(bookingModes, x.booking_mode_code ?? x.booking_mode, "booking_modes"),
-            x.entry_type === "blocked" ? "blocked" : "",
-            x.block_reason_code,
-            eventTypeLabels.get(x.event_type_code ?? ""),
-            bookingSourceLabels.get(x.booking_source_code ?? ""),
-            blockReasonLabels.get(x.block_reason_code ?? ""),
-            x.start_date
-          ].some(v => String(v ?? "").toLowerCase().includes(q))
-        )
-      : rows;
-  }, [rows, query, entryStatuses, bookingModes, eventTypeLabels, bookingSourceLabels, blockReasonLabels]);
+  const needsCustomer = !!draft && draft.booking_status !== "blocked";
+  const selectedCustomer = draft?.customer_id;
+  useEffect(() => {
+    if (!needsCustomer || !customerQuery.trim()) {
+      setCustomers([]);
+      setCustomerError("");
+      setCustomerSearching(false);
+      return;
+    }
+    let current = true;
+    setCustomers([]);
+    setCustomerError("");
+    setCustomerSearching(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await mprInvoke<{ data: Customer[] }>(supabase, "mpr-api", {
+          action: "list-booking-customers", query: customerQuery,
+        });
+        if (current) { setCustomers(result.data); setCustomerError(""); }
+      } catch (e: any) {
+        if (current) setCustomerError(e.message ?? "Unable to find customers.");
+      } finally {
+        if (current) setCustomerSearching(false);
+      }
+    }, 200);
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [supabase, needsCustomer, customerQuery]);
 
   const update = (key: keyof Draft, value: string) => {
     setDraft(d => (d ? { ...d, [key]: value } : d));
   };
 
   function edit(row: Booking) {
+    setWriteError("");
+    setCustomerQuery("");
+    setCustomerName(row.customer_name ?? "");
+    setCustomerDraft(null);
     setDraft({
       id: row.id,
+      revision: row.revision,
+      hold_expires_at: row.hold_expires_at,
       venue_id: row.venue_id,
       customer_id: row.customer_id ?? "",
       event_name: row.event_name ?? "",
@@ -298,18 +336,53 @@ export function BookingManager({
     });
   }
 
+  function selectCustomer(customer: Customer) {
+    update("customer_id", customer.id);
+    setCustomerName(customer.customer_name);
+    setCustomerQuery("");
+  }
+
+  async function createCustomer() {
+    if (!customerDraft || customerSaving) return;
+    const name = customerDraft.customer_name.trim();
+    if (!name) {
+      setCustomerCreateError("Enter a customer name.");
+      return;
+    }
+    if (!customerEmail.current?.reportValidity()) return;
+    setCustomerSaving(true);
+    setCustomerCreateError("");
+    try {
+      const { data } = await mprInvoke<{ data: { id: string } }>(supabase, "mpr-api", {
+        action: "save-customer", ...customerDraft,
+      });
+      selectCustomer({ id: data.id, customer_name: name });
+      setCustomerDraft(null);
+    } catch (e: any) {
+      setCustomerCreateError(e.message ?? "Unable to create customer.");
+    } finally {
+      setCustomerSaving(false);
+    }
+  }
+
   async function save(e: FormEvent) {
     e.preventDefault();
-    if (!draft) return;
+    if (!draft || saving || customerSaving || customerDraft) return;
+    if (draft.booking_status !== "blocked" && !draft.customer_id) {
+      setWriteError("Search for an existing customer or create one before saving the booking.");
+      return;
+    }
 
-    setBusy(true);
-    setError("");
+    setSaving(true);
+    setWriteError("");
     setMessage("");
 
     try {
       await mprInvoke(supabase, "mpr-api", {
         action: "save-booking",
         ...draft,
+        hold_minutes: draft.booking_status === "pending" && draft.hold_minutes !== undefined
+          ? (draft.hold_minutes ? Number(draft.hold_minutes) : null) : undefined,
         ...(halfDayTimes[schedule] ? { start_time: null, end_time: null } : {}),
         customer_id:
           draft.booking_status === "blocked"
@@ -326,9 +399,9 @@ export function BookingManager({
 
       await load();
     } catch (e: any) {
-      setError(e.message ?? "Unable to save booking.");
+      setWriteError(e.message ?? "Unable to save booking.");
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
@@ -344,22 +417,23 @@ export function BookingManager({
       return;
     }
 
-    setBusy(true);
-    setError("");
+    setSaving(true);
+    setWriteError("");
     setMessage("");
 
     try {
       await mprInvoke(supabase, "mpr-api", {
         action: "cancel-booking",
-        id: row.id
+        id: row.id,
+        revision: row.revision
       });
 
       setMessage("Entry cancelled.");
       await load();
     } catch (e: any) {
-      setError(e.message ?? "Unable to cancel entry.");
+      setWriteError(e.message ?? "Unable to cancel entry.");
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
@@ -370,7 +444,7 @@ export function BookingManager({
           <Search size={17} />
           <input
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={e => { setQuery(e.target.value); setPage(0); }}
             placeholder="Search event, customer, venue or status…"
           />
         </div>
@@ -378,18 +452,22 @@ export function BookingManager({
         <div className="master-actions">
           <button
             className="outline-btn"
-            onClick={() => { void load(); void loadPicklists(); void loadFieldLabels(); }}
+            onClick={() => { void load(); void loadPicklists(); void loadFieldLabels(); void loadVenues(); }}
             disabled={busy}
           >
             <RefreshCw size={15} /> Refresh
           </button>
 
-          {can("create") && (
+          {canCreate && (
             <button
               className="primary-btn"
-              disabled={!defaultStatus || !defaultMode}
+              disabled={saving || !defaultStatus || !defaultMode}
               onClick={() => {
                 if (!defaultStatus || !defaultMode) return;
+                setWriteError("");
+                setCustomerQuery("");
+                setCustomerName("");
+                setCustomerDraft(null);
                 const date = today();
                 const defaultSchedule = getBookingSchedule(defaultMode.extra_data?.behavior, defaultMode.value_code, "full_day");
                 setDraft({
@@ -413,6 +491,8 @@ export function BookingManager({
       {error && (
         <div className="error-box master-message">{error}</div>
       )}
+
+      {!draft && writeError && <div className="error-box master-message" role="alert">{writeError}</div>}
 
       {message && (
         <div className="notice master-message">
@@ -440,14 +520,11 @@ export function BookingManager({
           </thead>
 
           <tbody>
-            {filtered.map(r => {
-              const displayStatus =
-                r.status !== "active"
-                  ? "Cancelled"
-                  : optionLabel(entryStatuses, statusCode(r), "entry_statuses");
+            {rows.map(r => {
+              const editable = r.status === "active" && !holdExpired(r);
 
               const statusClass =
-                r.status !== "active"
+                !editable
                   ? "inactive"
                   : r.entry_type === "blocked"
                     ? "blocked"
@@ -482,7 +559,7 @@ export function BookingManager({
 
                   <td>
                     <span className={`master-status ${statusClass}`}>
-                      {displayStatus}
+                      {statusLabel(r, entryStatuses)}
                     </span>
                   </td>
 
@@ -492,7 +569,13 @@ export function BookingManager({
                   <AuditCells record={r}/>
                   <td>
                     <div className="master-row-actions">
-                      {can("edit") && r.status === "active" && (
+                      {onWorkflow && r.entry_type === "reserved" && (
+                        <button type="button" className="icon-btn" title="Booking workflow"
+                          onClick={() => onWorkflow({ id: r.id, title: r.event_name || "Reservation" })}>
+                          <ListChecks size={15}/>
+                        </button>
+                      )}
+                      {can("edit", r.entry_type) && editable && (
                         <button
                           className="icon-btn"
                           title="Edit"
@@ -502,10 +585,11 @@ export function BookingManager({
                         </button>
                       )}
 
-                      {can("delete") && r.status === "active" && (
+                      {can("delete", r.entry_type) && editable && (
                         <button
                           className="icon-btn danger"
                           title="Cancel entry"
+                          disabled={saving}
                           onClick={() => void cancel(r)}
                         >
                           <Ban size={15} />
@@ -517,7 +601,7 @@ export function BookingManager({
               );
             })}
 
-            {!busy && filtered.length === 0 && (
+            {!busy && rows.length === 0 && (
               <tr>
                 <td colSpan={14} className="master-empty">
                   No bookings or blocked periods found.
@@ -530,13 +614,18 @@ export function BookingManager({
         {busy && <div className="master-loading">Working…</div>}
       </div>
 
+      <div className="toolbar-actions" aria-label="Booking pages">
+        <button className="outline-btn" type="button" disabled={busy || page === 0} onClick={() => setPage(page - 1)}>Previous</button>
+        <span aria-live="polite">Page {page + 1}</span>
+        <button className="outline-btn" type="button" disabled={busy || !hasMore} onClick={() => setPage(page + 1)}>Next</button>
+      </div>
+
       {details && (
         <BookingDetails
           title={details.event_name || (details.entry_type === "blocked" ? "Blocked period" : "Booking details")}
           fields={[
             ["Entry type", details.entry_type === "blocked" ? "Venue block" : "Reservation"],
-            ["Entry status", details.status === "active"
-              ? optionLabel(entryStatuses, statusCode(details), "entry_statuses") : "Cancelled"],
+            ["Entry status", statusLabel(details, entryStatuses)],
             ["Venue", details.venue_name ?? "—"],
             ["Booking mode", optionLabel(bookingModes, details.booking_mode_code ?? details.booking_mode, "booking_modes")],
             ["Start date", details.start_date],
@@ -562,7 +651,7 @@ export function BookingManager({
         <div
           className="master-modal-backdrop"
           onMouseDown={e => {
-            if (e.target === e.currentTarget) setDraft(null);
+            if (e.target === e.currentTarget && !customerSaving && !saving) setDraft(null);
           }}
         >
           <form className="master-modal" onSubmit={save}>
@@ -581,12 +670,14 @@ export function BookingManager({
               <button
                 type="button"
                 className="icon-btn"
+                disabled={customerSaving || saving}
                 onClick={() => setDraft(null)}
               >
                 <X size={18} />
               </button>
             </div>
 
+            {writeError && <div className="error-box" role="alert">{writeError}</div>}
             <div className="master-form-grid">
               <label>
                 Entry status *
@@ -609,8 +700,9 @@ export function BookingManager({
                         : d
                     );
                   }}
+                  disabled={customerSaving || !!customerDraft}
                 >
-                  <WorkflowOptions options={entryStatuses} value={draft.entry_status_code} listCode="entry_statuses"/>
+                  <WorkflowOptions options={statusOptions} value={draft.entry_status_code} listCode="entry_statuses"/>
                 </select>
               </label>
 
@@ -625,21 +717,67 @@ export function BookingManager({
                 />
               </label>
 
-              {draft.booking_status !== "blocked" && (
+              {needsCustomer && <div className="booking-customer-search">
+                {selectedCustomer && <div className="toolbar-actions">
+                  <strong>Customer: {customerName}</strong>
+                  <button type="button" className="outline-btn" onClick={() => update("customer_id", "")}
+                    disabled={customerSaving}>Change customer</button>
+                </div>}
+                {!selectedCustomer && !customerDraft && <>
+                  <label>
+                    Customer *
+                    <input value={customerQuery} onChange={e => setCustomerQuery(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") e.preventDefault(); }}
+                      placeholder="Search customer records" maxLength={150} autoComplete="off" />
+                  </label>
+                  {customerSearching && <p role="status">Searching customers…</p>}
+                  {customerError && <p role="alert">{customerError}</p>}
+                  {customerQuery.trim() && !customerSearching && !customerError && customers.length === 0 &&
+                    <p role="status">No matching customers.</p>}
+                  {customers.length > 0 && <ul className="booking-customer-results" aria-label="Matching customers">
+                    {customers.map(customer => <li key={customer.id}>
+                      <button type="button" className="outline-btn" onClick={() => selectCustomer(customer)}>
+                        <b>{customer.customer_name}</b>
+                        {(customer.mobile || customer.email) && <span>{[customer.mobile, customer.email].filter(Boolean).join(" · ")}</span>}
+                      </button>
+                    </li>)}
+                  </ul>}
+                  {canCreateCustomer && <button type="button" className="outline-btn" onClick={() => {
+                    setCustomerCreateError("");
+                    setCustomerDraft({ ...blankCustomer(), customer_name: customerQuery.trim() });
+                  }}><Plus size={15} /> Create customer</button>}
+                </>}
+                {customerDraft && <fieldset className="booking-new-customer" disabled={customerSaving}
+                  onKeyDown={e => { if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault(); }}>
+                  <legend>New customer</legend>
+                  <label>Customer name *<input value={customerDraft.customer_name} maxLength={200}
+                    onChange={e => setCustomerDraft({ ...customerDraft, customer_name: e.target.value })} /></label>
+                  <label>Mobile<input type="tel" value={customerDraft.mobile} maxLength={40}
+                    onChange={e => setCustomerDraft({ ...customerDraft, mobile: e.target.value })} /></label>
+                  <label>Email<input ref={customerEmail} type="email" value={customerDraft.email} maxLength={254}
+                    onChange={e => setCustomerDraft({ ...customerDraft, email: e.target.value })} /></label>
+                  <label>Customer category<PicklistSelect supabase={supabase} listCode="customer_categories"
+                    value={customerDraft.customer_category_code}
+                    onChange={value => setCustomerDraft({ ...customerDraft, customer_category_code: value })} /></label>
+                  {customerCreateError && <p role="alert">{customerCreateError}</p>}
+                  <div className="toolbar-actions">
+                    <button type="button" className="outline-btn" onClick={() => setCustomerDraft(null)}>Cancel</button>
+                    <button type="button" className="primary-small" onClick={() => void createCustomer()}>Create and select</button>
+                  </div>
+                </fieldset>}
+              </div>}
+
+              {draft.booking_status === "pending" && (
                 <label>
-                  Customer *
-                  <select
-                    required
-                    value={draft.customer_id}
-                    onChange={e => update("customer_id", e.target.value)}
-                  >
-                    <option value="">Select customer</option>
-                    {customers.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.customer_name}
-                        {c.mobile ? ` · ${c.mobile}` : ""}
-                      </option>
-                    ))}
+                  Temporary hold
+                  <select value={draft.hold_minutes ?? (draft.hold_expires_at ? "keep" : "")}
+                    onChange={e => setDraft({ ...draft, hold_minutes: e.target.value === "keep" ? undefined : e.target.value })}>
+                    {draft.hold_expires_at && <option value="keep">Keep current expiry</option>}
+                    <option value="">No expiry</option>
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                    <option value="240">4 hours</option>
+                    <option value="1440">24 hours</option>
                   </select>
                 </label>
               )}
@@ -665,6 +803,9 @@ export function BookingManager({
                   onChange={e => update("venue_id", e.target.value)}
                 >
                   <option value="">Select venue</option>
+                  {draft.venue_id && !venues.some(v => v.id === draft.venue_id) && (
+                    <option value={draft.venue_id} disabled>{original?.venue_name ?? "Unavailable venue"}</option>
+                  )}
                   {venues.map(v => (
                     <option key={v.id} value={v.id}>
                       {v.venue_name}
@@ -808,6 +949,7 @@ export function BookingManager({
               <button
                 type="button"
                 className="outline-btn"
+                disabled={customerSaving || saving}
                 onClick={() => setDraft(null)}
               >
                 Cancel
@@ -816,10 +958,7 @@ export function BookingManager({
               <button
                 className="primary-btn"
                 disabled={
-                  busy ||
-                  venues.length === 0 ||
-                  (draft.booking_status !== "blocked" &&
-                    customers.length === 0)
+                  busy || saving || customerSaving || !!customerDraft || venues.length === 0
                 }
               >
                 <Save size={16} />

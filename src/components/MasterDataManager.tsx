@@ -2,7 +2,7 @@ import { getLovLabels } from "../lib/mprCalendars";
 import { PicklistSelect } from "./PicklistSelect";
 import { AuditCells, AuditHeaders } from "./RecordAudit";
 import type { RecordAudit } from "../lib/recordAudit";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, Search, Pencil, RefreshCw, X, Save, Power, Trash2 } from "lucide-react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mprInvoke } from "../lib/mprAuth";
@@ -38,23 +38,33 @@ const labels: Record<string,string> = {
 
 export function MasterDataManager({ module, supabase, permissions, role }: Props) {
   const config = configs[module];
-  const can = (action:string) => role === "admin" || (role === "manager" && module === "auspicious_dates") || permissions.some(p => p.module === module && p.action === action);
+  const can = (action:string) => role === "admin" || (role === "manager" && module === "auspicious_dates") || (role !== "viewer" && permissions.some(p => p.module === module && p.action === action));
   const [picklistLabels, setPicklistLabels] = useState<Record<string, Map<string, string>>>({});
   const [rows,setRows] = useState<Row[]>([]);
   const [query,setQuery] = useState("");
+  const [page,setPage] = useState(0);
+  const [hasMore,setHasMore] = useState(false);
+  const loadVersion = useRef(0);
   const [form,setForm] = useState<Row|null>(null);
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState("");
   const [message,setMessage] = useState("");
 
   const load = useCallback(async () => {
+    const version = ++loadVersion.current;
     setBusy(true); setError("");
     try {
-      const result = await mprInvoke<{data:Row[]}>(supabase,"mpr-api",{action:config.list});
-      setRows(result.data ?? []);
-    } catch (e:any) { setError(e.message ?? "Unable to load records."); }
-    finally { setBusy(false); }
-  }, [supabase, config.list]);
+      const result = await mprInvoke<{data:Row[];has_more:boolean}>(supabase,"mpr-api",{action:config.list,query,page});
+      if (version !== loadVersion.current) return;
+      setRows(result.data);
+      setHasMore(result.has_more);
+      if (page > 0 && !result.data.length) setPage(page - 1);
+    } catch (e:any) {
+      if (version === loadVersion.current) setError(e.message ?? "Unable to load records.");
+    } finally {
+      if (version === loadVersion.current) setBusy(false);
+    }
+  }, [supabase, config.list, query, page]);
 
   const loadLabels = useCallback(async () => {
     const fields = config.columns.filter(field => picklists[field]);
@@ -67,14 +77,10 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
   }, [config.columns, supabase]);
 
   useEffect(() => {
-    void load();
-    void loadLabels();
-  }, [load, loadLabels]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? rows.filter(row => [...Object.values(row), ...Object.entries(picklistLabels).map(([field, fieldLabels]) => fieldLabels.get(row[field]))].some(v => String(v ?? "").toLowerCase().includes(q))) : rows;
-  }, [rows,query,picklistLabels]);
+    const timer = window.setTimeout(() => void load(), query ? 250 : 0);
+    return () => { window.clearTimeout(timer); loadVersion.current++; };
+  }, [load, query]);
+  useEffect(() => { void loadLabels(); }, [loadLabels]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault(); if (!form) return;
@@ -105,7 +111,7 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
   const columns = config.columns;
   return <div className="master-module">
     <div className="master-toolbar">
-      <div className="master-search"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Search ${config.title.toLowerCase()}…`}/></div>
+      <div className="master-search"><Search size={17}/><input value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}} placeholder={`Search ${config.title.toLowerCase()}…`}/></div>
       <div className="master-actions">
         <button className="outline-btn" onClick={()=>{void load(); void loadLabels();}} disabled={busy}><RefreshCw size={15}/> Refresh</button>
         {can("create") && <button className="primary-btn" onClick={()=>setForm({...empty(module),id:""})}><Plus size={16}/> Add {module==="customers"?"customer":module==="venues"?"venue":"date"}</button>}
@@ -116,7 +122,7 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
     <div className="master-table-wrap">
       <table className="master-table"><thead><tr>{columns.map(c=><th key={c}>{labels[c] ?? c}</th>)}<th>Status</th><AuditHeaders/><th>Actions</th></tr></thead>
         <tbody>
-          {filtered.map(row=><tr key={row.id}>
+          {rows.map(row=><tr key={row.id}>
             {columns.map(c=><td key={c}>{c==="date" ? String(row[c]??"").slice(0,10) : String(row[c]??"—")}</td>)}
             <td><span className={`master-status ${row.is_active===false?"inactive":"active"}`}>{row.is_active===false?"Inactive":"Active"}</span></td>
             <AuditCells record={row}/>
@@ -125,10 +131,15 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
               {can("delete")&&<button className="icon-btn danger" title={module==="customers"?"Delete":"Deactivate"} onClick={()=>void deactivate(row)}>{module==="customers"?<Trash2 size={15}/>:<Power size={15}/>}</button>}
             </div></td>
           </tr>)}
-          {!busy && filtered.length===0 && <tr><td colSpan={columns.length+6} className="master-empty">No records found.</td></tr>}
+          {!busy && rows.length===0 && <tr><td colSpan={columns.length+6} className="master-empty">No records found.</td></tr>}
         </tbody>
       </table>
       {busy&&<div className="master-loading">Working…</div>}
+    </div>
+    <div className="toolbar-actions" aria-label="Record pages">
+      <button type="button" className="outline-btn" disabled={busy || page===0} onClick={()=>setPage(page-1)}>Previous</button>
+      <span aria-live="polite">Page {page+1}</span>
+      <button type="button" className="outline-btn" disabled={busy || !hasMore} onClick={()=>setPage(page+1)}>Next</button>
     </div>
     {form&&<div className="master-modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setForm(null);}}>
       <form className="master-modal" onSubmit={save}>

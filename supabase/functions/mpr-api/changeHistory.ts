@@ -1,7 +1,8 @@
 import { db, reply } from "../_shared/auth.ts";
 
 const fields: Readonly<Record<string, readonly string[]>> = {
-  calendar_entries: ["event_name","venue_id","customer_id","entry_type","entry_status_code","booking_status","booking_mode_code","booking_mode","event_type_code","booking_source_code","block_reason_code","start_date","end_date","start_time","end_time","timezone","status","notes"],
+  calendar_entries: ["event_name","venue_id","customer_id","entry_type","entry_status_code","booking_status","booking_mode_code","booking_mode","event_type_code","booking_source_code","block_reason_code","start_date","end_date","start_time","end_time","timezone","status","hold_expires_at","notes"],
+  booking_workflow_items: ["kind","booking_id","title","status","amount","due_at","notes"],
   customers: ["customer_name","mobile","email","address","city","customer_category_code","notes"],
   venues: ["venue_name","venue_code","venue_type_code","address","city","timezone","is_active"],
   auspicious_dates: ["date","title","category_code","region_code","description","source","is_active"],

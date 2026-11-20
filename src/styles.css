@@ -116,3 +116,21 @@
     touch-action: none;
   }
 }
+.availability-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.availability-controls select,.availability-controls input{background:#fff;border:1px solid #dfe5eb;border-radius:7px;padding:7px;color:#243247}
+.availability-calendar{background:#fff;border:1px solid #e7ecf1;border-radius:10px;padding:14px}
+.availability-calendar h2{font-size:18px;margin:0 0 14px}
+.availability-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.availability-weekday{text-align:center;font-size:11px;color:#647184}
+.availability-day{min-height:72px;border:1px solid #edf0f3;border-radius:5px;padding:4px;font-size:11px;overflow-wrap:anywhere}
+.availability-slot,.availability-free,.availability-occasion{display:block;margin-top:4px;padding:3px;border-radius:4px}
+.availability-slot span{display:block}
+.availability-free,.availability-slot.reserved{color:#256541;background:#eaf6ef}
+.availability-slot.blocked{color:#983935;background:#fff0ef}
+.availability-slot.hold,.availability-occasion{color:#77531d;background:#fbf4e7}
+.booking-customer-search{grid-column:1/-1;display:grid;gap:8px}
+.booking-customer-search p{margin:0}
+.booking-customer-search>.outline-btn{justify-self:start}
+.booking-customer-results{display:grid;gap:4px;list-style:none;margin:0;padding:0;max-height:12rem;overflow:auto}
+.booking-customer-results button{width:100%;justify-content:space-between;text-align:left}
+.booking-new-customer{border:1px solid #dfe5eb;border-radius:8px;display:grid;gap:8px;padding:12px}

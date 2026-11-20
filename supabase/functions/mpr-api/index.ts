@@ -1,6 +1,6 @@
 import { listChangeHistory } from "./changeHistory.ts";
 import { authenticate, allowed, db, reply, corsHeaders } from "../_shared/auth.ts";
-import { recordActors, recordAudit } from "../_shared/recordAudit.ts";
+import { recordAudit } from "../_shared/recordAudit.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -47,11 +47,13 @@ Deno.serve(async (req) => {
   const ctx = await authenticate(req);
 
   if ("error" in ctx) {
-    return reply({ error: ctx.error }, 401);
+    return reply({ error: ctx.error }, ctx.status ?? 401);
   }
 
   try {
-    const b = await req.json();
+    if (ctx.user.must_change_password) return fail("Change your password to continue", 403);
+    const b = await req.json().catch(() => null);
+    if (!b || typeof b !== "object" || Array.isArray(b)) return fail("Invalid request");
     const action = String(b.action ?? "");
 
     if (action === "list-change-history") {
@@ -65,23 +67,30 @@ Deno.serve(async (req) => {
         !(
           allowed(ctx, "venues", "view") ||
           allowed(ctx, "calendar", "view") ||
-          allowed(ctx, "bookings", "view")
+          allowed(ctx, "bookings", "view") || allowed(ctx, "calendar_blocks", "view")
         )
       ) {
         return fail("Permission denied", 403);
       }
 
-      const { data, error } = await db.from("venues")
-        .select("id,venue_name,venue_code,timezone")
-        .eq("is_active", true)
-        .order("venue_name");
-
+      const { data, error } = await db.rpc("mpr_active_venues", { p_actor: ctx.user.id });
       if (error) throw error;
-      return reply({ data: data ?? [] });
+      return reply({ data });
     }
 
     if (action === "get-lov-values") {
       const code = String(b.list_code ?? "");
+      const modules: Record<string, string[]> = {
+        entry_statuses: ["bookings", "calendar_blocks"], booking_modes: ["bookings", "calendar_blocks"],
+        event_types: ["bookings"], booking_sources: ["bookings"], block_reasons: ["calendar_blocks"],
+        customer_categories: ["customers"], venue_types: ["venues"],
+        auspicious_categories: ["auspicious_dates"], regions: ["auspicious_dates"],
+      };
+      if (ctx.user.role !== "admin" && !Object.hasOwn(modules, code)) return fail("Permission denied", 403);
+      if (ctx.user.role !== "admin" && !modules[code].some(module =>
+        ["view", "create", "edit"].some(operation => allowed(ctx, module, operation)))) {
+        return fail("Permission denied", 403);
+      }
 
       const { data: list, error: le } = await db.from("lov_lists")
         .select("id")
@@ -107,62 +116,35 @@ Deno.serve(async (req) => {
       return reply({ data: data ?? [] });
     }
 
-    // Three calendar data sets.
-    if (action === "get-three-calendars") {
+    if (action === "get-availability" || action === "get-three-calendars") {
+      if (!allowed(ctx, "calendar", "view")) return fail("Calendar permission required", 403);
       const venueId = String(b.venue_id ?? "");
       const month = String(b.month ?? "");
-
-      if (!UUID.test(venueId) || !/^\d{4}-\d{2}$/.test(month)) {
+      if (!UUID.test(venueId) || !/^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(month)) {
         return fail("Invalid venue or month");
       }
-
-      if (!allowed(ctx, "calendar", "view")) {
-        return fail("Calendar permission required", 403);
-      }
-
-      const [y, m] = month.split("-").map(Number);
-      const start = `${month}-01`;
-      const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
-      const end = `${month}-${String(last).padStart(2, "0")}`;
-
-      const [reserved, blocked, auspicious] = await Promise.all([
-        db.from("calendar_entries")
-          .select(`*,${recordActors("calendar", "_mpr_fk")}`)
-          .eq("venue_id", venueId)
-          .eq("entry_type", "reserved")
-          .eq("status", "active")
-          .lte("start_date", end)
-          .gte("end_date", start)
-          .order("starts_at"),
-
-        db.from("calendar_entries")
-          .select(`*,${recordActors("calendar", "_mpr_fk")}`)
-          .eq("venue_id", venueId)
-          .eq("entry_type", "blocked")
-          .eq("status", "active")
-          .lte("start_date", end)
-          .gte("end_date", start)
-          .order("starts_at"),
-
-        db.from("auspicious_dates")
-          .select(`id,date,title,category_code,description,region_code,${recordAudit("auspicious", "_mpr_fk")}`)
-          .eq("is_active", true)
-          .gte("date", start)
-          .lte("date", end)
-          .order("date")
-      ]);
-
-      if (reserved.error) throw reserved.error;
-      if (blocked.error) throw blocked.error;
-      if (auspicious.error) throw auspicious.error;
-
-      return reply({
-        reserved: reserved.data ?? [],
-        blocked: blocked.data ?? [],
-        auspicious: allowed(ctx, "auspicious_dates", "view")
-          ? (auspicious.data ?? [])
-          : []
+      const [year, monthNumber] = month.split("-").map(Number);
+      const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+      const { data, error } = await db.rpc("mpr_availability", {
+        p_actor: ctx.user.id, p_venue: venueId,
+        p_start: `${month}-01`, p_end: `${month}-${lastDay}`,
       });
+      if (error) throw error;
+      if (action === "get-three-calendars") {
+        return reply({
+          reserved: data.entries.filter((entry: { entry_type: string }) => entry.entry_type === "reserved"),
+          blocked: data.entries.filter((entry: { entry_type: string }) => entry.entry_type === "blocked"),
+          auspicious: data.auspicious,
+        });
+      }
+      return reply(data);
+    }
+
+    if (action === "get-dashboard-counts") {
+      if (!allowed(ctx, "dashboard", "view")) return fail("Dashboard permission required", 403);
+      const { data, error } = await db.rpc("mpr_dashboard_counts", { p_actor: ctx.user.id });
+      if (error) throw error;
+      return reply({ data });
     }
 
     // LOV administration.
@@ -298,20 +280,21 @@ Deno.serve(async (req) => {
       return reply({ ok: true });
     }
 
-    // Customers.
-    if (action === "list-customers") {
-      if (!allowed(ctx, "customers", "view")) {
-        return fail("Customers view permission required", 403);
-      }
-
-      const { data, error } = await db.from("customers")
-        .select(`id,customer_name,mobile,email,address,city,customer_category_code,notes,${recordAudit("customers", "_mpr_fk")}`)
-        .order("customer_name");
-
+    const recordModule = action === "list-customers" ? "customers"
+      : action === "list-venues" ? "venues"
+      : action === "list-auspicious-dates" ? "auspicious_dates" : null;
+    if (recordModule) {
+      if (!allowed(ctx, recordModule, "view")) return fail("Record view permission required", 403);
+      const page = b.page ?? 0;
+      if (!Number.isSafeInteger(page) || page < 0 || page > 85_899_345) return fail("Invalid page");
+      const { data, error } = await db.rpc("mpr_search_records", {
+        p_actor: ctx.user.id, p_module: recordModule, p_page: page, p_query: cleanText(b.query, 150) ?? "",
+      });
       if (error) throw error;
-      return reply({ data: data ?? [] });
+      return reply(data);
     }
 
+    // Customers.
     if (action === "save-customer") {
       const id = b.id ? String(b.id) : "";
       const isEdit = Boolean(id);
@@ -381,19 +364,6 @@ Deno.serve(async (req) => {
     }
 
     // Venues: soft deactivation preserves booking history.
-    if (action === "list-venues") {
-      if (!allowed(ctx, "venues", "view")) {
-        return fail("Venues view permission required", 403);
-      }
-
-      const { data, error } = await db.from("venues")
-        .select(`id,venue_name,venue_code,venue_type_code,address,city,timezone,is_active,${recordAudit("venues")}`)
-        .order("venue_name");
-
-      if (error) throw error;
-      return reply({ data: data ?? [] });
-    }
-
     if (action === "save-venue") {
       const id = b.id ? String(b.id) : "";
       const isEdit = Boolean(id);
@@ -458,19 +428,6 @@ Deno.serve(async (req) => {
     }
 
     // Auspicious dates: deactivation retains historical references.
-    if (action === "list-auspicious-dates") {
-      if (!allowed(ctx, "auspicious_dates", "view")) {
-        return fail("Auspicious dates view permission required", 403);
-      }
-
-      const { data, error } = await db.from("auspicious_dates")
-        .select(`id,date,title,category_code,description,region_code,source,is_active,${recordAudit("auspicious", "_mpr_fk")}`)
-        .order("date", { ascending: false });
-
-      if (error) throw error;
-      return reply({ data: data ?? [] });
-    }
-
     if (action === "save-auspicious-date") {
       const id = b.id ? String(b.id) : "";
       const isEdit = Boolean(id);
@@ -539,58 +496,84 @@ Deno.serve(async (req) => {
       return reply({ ok: true });
     }
 
+    if (action === "list-booking-workflow" || action === "save-booking-workflow") {
+      const booking = b.booking_id ?? null;
+      if (booking !== null && (typeof booking !== "string" || !UUID.test(booking))) return fail("Invalid booking ID");
+      const kinds = ["inquiry", "quote", "deposit", "reminder", "instructions"];
+      const kind = b.kind ?? null;
+      if (kind !== null && !kinds.includes(kind)) return fail("Select a workflow item type");
+      if (action === "list-booking-workflow") {
+        if (!allowed(ctx, "booking_workflow", "view")) return fail("Booking workflow view permission required", 403);
+        const page = b.page ?? 0;
+        if (!Number.isSafeInteger(page) || page < 0) return fail("Invalid page");
+        const { data, error } = await db.rpc("mpr_list_booking_workflow", {
+          p_actor: ctx.user.id, p_booking: booking, p_kind: kind,
+          p_query: cleanText(b.query, 150) ?? "", p_page: page,
+        });
+        if (error) throw error;
+        return reply(data);
+      }
+      const id = b.id ?? null;
+      if (id !== null && (typeof id !== "string" || !UUID.test(id))) return fail("Invalid workflow record ID");
+      if (!allowed(ctx, "booking_workflow", id ? "edit" : "create")) return fail("Booking workflow permission required", 403);
+      if (!kind) return fail("Select a workflow item type");
+      const amount = b.amount ?? null;
+      if (amount !== null && (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0 || amount >= 1e12)) {
+        return fail("Enter a valid amount");
+      }
+      const { data, error } = await db.rpc("mpr_save_booking_workflow", {
+        p_actor: ctx.user.id, p_id: id,
+        p_record: {
+          booking_id: booking, kind, title: requireText(b.title, "Title"), status: requireText(b.status, "Status", 30),
+          amount, due_at: cleanText(b.due_at, 40), notes: cleanText(b.notes, 4000), updated_at: cleanText(b.updated_at, 40),
+        },
+      });
+      if (error) throw error;
+      return reply({ data: { id: data } }, id ? 200 : 201);
+    }
+
     // Booking workspace: reservations and blocked periods.
     if (action === "list-bookings") {
-      if (!allowed(ctx, "bookings", "view")) {
-        return fail("Bookings view permission required", 403);
+      if (!allowed(ctx, "bookings", "view") && !allowed(ctx, "calendar_blocks", "view")) {
+        return fail("Bookings or calendar blocks view permission required", 403);
       }
-
-      const { data, error } = await db.from("calendar_entries")
-        .select(`
-          id,venue_id,customer_id,event_name,event_type_code,
-          booking_source_code,entry_type,booking_mode,start_date,
-          end_date,start_time,end_time,booking_status,entry_status_code,booking_mode_code,
-          block_reason_code,status,notes,timezone,starts_at,ends_at,
-          ${recordAudit("calendar", "_mpr_fk")}
-        `)
-        .in("entry_type", ["reserved", "blocked"])
-        .order("starts_at", { ascending: false });
-
+      const page = b.page ?? 0;
+      if (!Number.isSafeInteger(page) || page < 0 || page > 85_899_345) return fail("Invalid page");
+      const { data, error } = await db.rpc("mpr_search_bookings", {
+        p_actor: ctx.user.id, p_page: page, p_query: cleanText(b.query, 150) ?? "",
+      });
       if (error) throw error;
-      return reply({ data: data ?? [] });
+      return reply(data);
     }
 
     if (action === "list-booking-customers") {
-      if (!allowed(ctx, "bookings", "view")) {
-        return fail("Bookings view permission required", 403);
+      if (!allowed(ctx, "bookings", "create") && !allowed(ctx, "bookings", "edit")) {
+        return fail("Booking write permission required", 403);
       }
-
-      const { data, error } = await db.from("customers")
-        .select("id,customer_name,mobile,email")
-        .order("customer_name");
-
+      const { data, error } = await db.rpc("mpr_booking_customer_lookup", {
+        p_actor: ctx.user.id, p_query: cleanText(b.query, 150) ?? "",
+      });
       if (error) throw error;
-      return reply({ data: data ?? [] });
+      return reply({ data });
     }
 
     if (action === "save-booking") {
       const id = b.id ? String(b.id) : null;
-      const isEdit = Boolean(id);
-
-      if (
-        isEdit
-          ? !allowed(ctx, "bookings", "edit")
-          : !allowed(ctx, "bookings", "create")
-      ) {
-        return fail("Bookings permission denied", 403);
-      }
-
       if (id && !UUID.test(id)) {
         return fail("Invalid booking ID");
       }
 
       const entryStatus = String(b.booking_status ?? "");
       const isBlocked = entryStatus === "blocked";
+      if (!allowed(ctx, isBlocked ? "calendar_blocks" : "bookings", id ? "edit" : "create")) {
+        return fail("Booking permission denied", 403);
+      }
+      if (id && (!Number.isSafeInteger(b.revision) || b.revision < 1)) {
+        return fail("Refresh and reopen this entry before saving.", 409);
+      }
+      if (b.hold_minutes != null && ![30, 60, 240, 1440].includes(b.hold_minutes)) {
+        return fail("Invalid hold duration");
+      }
 
       if (!["pending", "confirmed", "blocked"].includes(entryStatus)) {
         return fail("Invalid entry status");
@@ -625,6 +608,8 @@ Deno.serve(async (req) => {
 
       const payload = {
         venue_id: venueId,
+        revision: b.revision,
+        hold_minutes: b.hold_minutes,
         customer_id: customerId,
         event_name: requireText(
           b.event_name,
@@ -661,41 +646,36 @@ Deno.serve(async (req) => {
     }
 
     if (action === "cancel-booking") {
-      if (!allowed(ctx, "bookings", "delete")) {
-        return fail("Bookings delete permission required", 403);
+      if (!allowed(ctx, "bookings", "delete") && !allowed(ctx, "calendar_blocks", "delete")) {
+        return fail("Booking cancellation permission required", 403);
       }
-
       const id = String(b.id ?? "");
-      if (!UUID.test(id)) {
-        return fail("Invalid calendar entry ID");
+      if (!UUID.test(id)) return fail("Invalid calendar entry ID");
+      if (!Number.isSafeInteger(b.revision) || b.revision < 1) {
+        return fail("Refresh and reopen this entry before cancelling.", 409);
       }
-
-      const { data, error } = await db.from("calendar_entries")
-        .update({
-          status: "cancelled",
-          updated_by: ctx.user.id
-        })
-        .eq("id", id)
-        .in("entry_type", ["reserved", "blocked"])
-        .eq("status", "active")
-        .select("id")
-        .maybeSingle();
-
+      const { error } = await db.rpc("mpr_cancel_booking", {
+        p_actor: ctx.user.id, p_id: id, p_revision: b.revision,
+      });
       if (error) throw error;
-
-      if (!data) {
-        return fail("Active calendar entry not found", 404);
-      }
-
       return reply({ ok: true });
     }
 
     return fail("Unknown action");
 
   } catch (error) {
-    console.error("MPR API error:", error);
-
-    const message = getErrorMessage(error);
-    return fail(message);
+    const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
+    if (code === "23P01") return fail("This venue is already occupied for part of that period.", 409);
+    if (code === "23503") return fail("This record is linked to another record or no longer exists.", 409);
+    if (code === "40P01" || code === "40001") return fail("Another change was saved at the same time. Refresh and try again.", 409);
+    if (code === "P4090") return fail(getErrorMessage(error), 409);
+    if (code === "42501") return fail(getErrorMessage(error), 403);
+    if (code === "P0002" || code === "PGRST116") return fail("Record not found", 404);
+    if (code === "23505") return fail("A record with that code or name already exists.", 409);
+    if (error instanceof Error || ["P0001", "23514", "22023", "22P02", "22007", "22008"].includes(String(code))) {
+      return fail(getErrorMessage(error));
+    }
+    console.error("MPR API error", code);
+    return fail("Unable to complete the request", 500);
   }
 });

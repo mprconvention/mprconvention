@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Activity, CalendarDays, Users, Building2, ClipboardList, Settings, LogOut,
   Menu, Search, ChevronDown, ArrowUpRight, ShieldCheck, LockKeyhole,
@@ -37,6 +37,9 @@ export default function App() {
   const [loading,setLoading] = useState(true);
   const [mobile,setMobile] = useState(false);
   const [notice,setNotice] = useState('');
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const sidebar = useRef<HTMLElement>(null);
+  const main = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let live = true;
@@ -55,12 +58,41 @@ export default function App() {
     return () => { live = false; };
   }, []);
 
+  useEffect(() => {
+    if (!mobile) return;
+    const viewport = window.matchMedia('(max-width: 720px)');
+    if (!viewport.matches) {
+      setMobile(false);
+      return;
+    }
+
+    const pageContent = main.current;
+    if (pageContent) pageContent.inert = true;
+    sidebar.current?.focus({preventScroll: true});
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobile(false);
+    };
+    const onResize = (event: MediaQueryListEvent) => {
+      if (!event.matches) setMobile(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    viewport.addEventListener('change', onResize);
+
+    return () => {
+      if (pageContent) pageContent.inert = false;
+      window.removeEventListener('keydown', onKeyDown);
+      viewport.removeEventListener('change', onResize);
+      if (viewport.matches) menuButton.current?.focus({preventScroll: true});
+    };
+  }, [mobile]);
+
   const can = (module:string) =>
     user?.role === 'admin' || permissions.some(p => p.module===module && p.action==='view');
 
   async function signOut() {
     if (supabase) await mprLogout(supabase);
-    setUser(null); setPermissions([]); setPage('dashboard');
+    setMobile(false); setUser(null); setPermissions([]); setPage('dashboard');
   }
 
   if (!configReady || !supabase) return <SetupScreen />;
@@ -71,7 +103,9 @@ export default function App() {
   const allowedNav = nav.filter(n => n.id === 'history' ? user.role === 'admin' : can(n.module));
 
   return <div className="shell">
-    <aside className={`sidebar ${mobile?'open':''}`}>
+    {mobile && <button type="button" className="mobile-menu-backdrop" tabIndex={-1}
+      aria-label="Close navigation menu" onClick={() => setMobile(false)}/>}
+    <aside ref={sidebar} id="app-sidebar" tabIndex={-1} className={`sidebar ${mobile?'open':''}`}>
       <div className="brand"><img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><div><b>MPR</b><span>EVENT MANAGEMENT</span></div></div>
       <div className="workspace-label">WORKSPACE</div>
       <nav>{allowedNav.map(n => <button key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={() => {setPage(n.id);setMobile(false);}}><n.icon size={18}/><span>{n.label}</span>{page===n.id&&<span className="nav-dot"/>}</button>)}</nav>
@@ -80,9 +114,11 @@ export default function App() {
         <button className="nav-item" onClick={signOut}><LogOut size={18}/><span>Sign out</span></button>
       </div>
     </aside>
-    <main className="main">
+    <main ref={main} className="main">
       <header className="topbar">
-        <button className="icon-btn mobile-menu" onClick={() => setMobile(!mobile)}><Menu/></button>
+        <button ref={menuButton} type="button" className="icon-btn mobile-menu"
+          aria-label="Open navigation menu" aria-controls="app-sidebar" aria-expanded={mobile}
+          onClick={() => setMobile(true)}><Menu aria-hidden="true"/></button>
         <div className="crumb">MPR <span>/</span> {nav.find(n=>n.id===page)?.label??'Settings'}</div>
         <div className="top-actions">
           <div className="live-pill"><i/> System connected</div>

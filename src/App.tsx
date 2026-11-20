@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Activity, CalendarDays, Users, Building2, ClipboardList, Settings, LogOut,
   Menu, Search, ChevronDown, ArrowUpRight, ShieldCheck, LockKeyhole,
-  LayoutDashboard, CalendarCheck, CalendarX, Star, KeyRound, Eye, EyeOff
+  LayoutDashboard, CalendarCheck, CalendarX, Star, KeyRound, Eye, EyeOff, History
 } from 'lucide-react';
 import { supabase, configReady } from './lib/supabase';
 import {
@@ -13,8 +13,9 @@ import { AdminLovManager } from './components/AdminLovManager';
 import { UserManagement } from './components/UserManagement';
 import { MasterDataManager } from './components/MasterDataManager';
 import { BookingManager } from './components/BookingManager';
+import { ChangeHistory } from './components/ChangeHistory';
 
-type Page = 'dashboard'|'calendar'|'bookings'|'customers'|'venues'|'auspicious'|'users'|'lovs'|'reports'|'settings';
+type Page = 'dashboard'|'calendar'|'bookings'|'customers'|'venues'|'auspicious'|'users'|'lovs'|'history'|'reports'|'settings';
 
 const nav: {id: Page; label: string; icon: any; module: string}[] = [
   {id:'dashboard',label:'Dashboard',icon:LayoutDashboard,module:'dashboard'},
@@ -25,6 +26,7 @@ const nav: {id: Page; label: string; icon: any; module: string}[] = [
   {id:'auspicious',label:'Auspicious dates',icon:Star,module:'auspicious_dates'},
   {id:'users',label:'User access',icon:ShieldCheck,module:'users'},
   {id:'lovs',label:'Configuration',icon:Settings,module:'lovs'},
+  {id:'history',label:'Change history',icon:History,module:'audit_logs'},
   {id:'reports',label:'Reports',icon:Activity,module:'reports'}
 ];
 
@@ -66,7 +68,7 @@ export default function App() {
   if (!user) return <Login onLogin={(u,p) => { setUser(u); setPermissions(p); setNotice('Welcome back. Your MPR workspace is ready.'); }} />;
   if (user.must_change_password) return <ChangePassword onDone={async () => { await signOut(); setNotice('Password updated. Please sign in with your new password.'); }} />;
 
-  const allowedNav = nav.filter(n => can(n.module));
+  const allowedNav = nav.filter(n => n.id === 'history' ? user.role === 'admin' : can(n.module));
 
   return <div className="shell">
     <aside className={`sidebar ${mobile?'open':''}`}>
@@ -95,12 +97,13 @@ export default function App() {
         {page==='bookings'&&<BookingManager supabase={supabase} permissions={permissions} role={user.role}/>}
         {page==='users'&&user.role==='admin'&&<UserManagement/>}
         {page==='lovs'&&user.role==='admin'&&<AdminLovManager supabase={supabase}/>}
+        {page==='history'&&user.role==='admin'&&<ChangeHistory supabase={supabase}/>}
         {page==='customers'&&<MasterDataManager module="customers" supabase={supabase} permissions={permissions} role={user.role}/>}
         {page==='venues'&&<MasterDataManager module="venues" supabase={supabase} permissions={permissions} role={user.role}/>}
         {page==='auspicious'&&<MasterDataManager module="auspicious_dates" supabase={supabase} permissions={permissions} role={user.role}/>}
-        {!['dashboard','calendar','bookings','users','lovs','customers','venues','auspicious'].includes(page)&&<ComingSoon page={page}/>}
+        {!['dashboard','calendar','bookings','users','lovs','history','customers','venues','auspicious'].includes(page)&&<ComingSoon page={page}/>}
         {page==='users'&&user.role!=='admin'&&<NoAccess/>}
-        {page==='lovs'&&user.role!=='admin'&&<NoAccess/>}
+        {(page==='lovs'||page==='history')&&user.role!=='admin'&&<NoAccess/>}
         <footer className="footer"><span>© {new Date().getFullYear()} MPR Management</span><span>Secure operations <ShieldCheck size={13}/></span></footer>
       </section>
     </main>
@@ -108,10 +111,10 @@ export default function App() {
 }
 
 function pageTitle(p:Page) {
-  return ({dashboard:'Good evening',calendar:'Event calendars',bookings:'Bookings',customers:'Customers',venues:'Venue management',auspicious:'Auspicious dates',users:'User access',lovs:'Configuration',reports:'Reports',settings:'Settings'} as any)[p];
+  return ({dashboard:'Good evening',calendar:'Event calendars',bookings:'Bookings',customers:'Customers',venues:'Venue management',auspicious:'Auspicious dates',users:'User access',lovs:'Configuration',history:'Change history',reports:'Reports',settings:'Settings'} as any)[p];
 }
 function pageSubtitle(p:Page) {
-  return ({dashboard:'Here is what is happening across your venues today.',calendar:'Track reserved, blocked and auspicious dates across every venue.',bookings:'Create, review and manage event reservations.',customers:'Your customer directory and relationship history.',venues:'Manage locations, availability and venue details.',auspicious:'Maintain important dates for your regions and customers.',users:'Manage MPR accounts, roles and module permissions.',lovs:'Control dropdown values and configurable business lists.',reports:'Review booking activity and operational performance.'} as any)[p];
+  return ({dashboard:'Here is what is happening across your venues today.',calendar:'Track reserved, blocked and auspicious dates across every venue.',bookings:'Create, review and manage event reservations.',customers:'Your customer directory and relationship history.',venues:'Manage locations, availability and venue details.',auspicious:'Maintain important dates for your regions and customers.',users:'Manage MPR accounts, roles and module permissions.',lovs:'Control dropdown values and configurable business lists.',history:'Review record changes and their previous values.',reports:'Review booking activity and operational performance.'} as any)[p];
 }
 function SetupScreen() {
   return <div className="center-screen"><div className="login-card"><div className="brand-mark">M</div><h1>Connect your MPR project</h1><p>Add your Supabase project URL and publishable/anon key to the environment file.</p><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_ANON_KEY</code><p className="muted">Create <b>.env.local</b> in the project root, then restart the development server.</p></div></div>;

@@ -1,5 +1,5 @@
 import { bookingBehaviors } from "../lib/bookingPicklists";
-import { getLovValues, type LovOption } from "../lib/mprCalendars";
+import { getLovLabels, getLovValues, type LovOption } from "../lib/mprCalendars";
 import { PicklistSelect } from "./PicklistSelect";
 import { AuditCells, AuditHeaders } from "./RecordAudit";
 import type { RecordAudit } from "../lib/recordAudit";
@@ -138,6 +138,9 @@ export function BookingManager({
 
   const [entryStatuses, setEntryStatuses] = useState<LovOption[]>([]);
   const [bookingModes, setBookingModes] = useState<LovOption[]>([]);
+  const [eventTypeLabels, setEventTypeLabels] = useState<Map<string, string>>(new Map());
+  const [bookingSourceLabels, setBookingSourceLabels] = useState<Map<string, string>>(new Map());
+  const [blockReasonLabels, setBlockReasonLabels] = useState<Map<string, string>>(new Map());
   const [picklistError, setPicklistError] = useState("");
   const [rows, setRows] = useState<Booking[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -169,6 +172,17 @@ export function BookingManager({
     ?? entryStatuses.find(option => isActiveOption(option, "entry_statuses"));
   const defaultMode = bookingModes.find(option => isActiveOption(option, "booking_modes") && option.value_code === "full_day")
     ?? bookingModes.find(option => isActiveOption(option, "booking_modes"));
+
+  const loadFieldLabels = useCallback(async () => {
+    const [types, sources, reasons] = await Promise.allSettled([
+      getLovLabels(supabase, "event_types"),
+      getLovLabels(supabase, "booking_sources"),
+      getLovLabels(supabase, "block_reasons"),
+    ]);
+    if (types.status === "fulfilled") setEventTypeLabels(types.value);
+    if (sources.status === "fulfilled") setBookingSourceLabels(sources.value);
+    if (reasons.status === "fulfilled") setBlockReasonLabels(reasons.value);
+  }, [supabase]);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -223,7 +237,8 @@ export function BookingManager({
   useEffect(() => {
     void load();
     void loadPicklists();
-  }, [load, loadPicklists]);
+    void loadFieldLabels();
+  }, [load, loadPicklists, loadFieldLabels]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -239,11 +254,14 @@ export function BookingManager({
             optionLabel(bookingModes, x.booking_mode_code ?? x.booking_mode, "booking_modes"),
             x.entry_type === "blocked" ? "blocked" : "",
             x.block_reason_code,
+            eventTypeLabels.get(x.event_type_code ?? ""),
+            bookingSourceLabels.get(x.booking_source_code ?? ""),
+            blockReasonLabels.get(x.block_reason_code ?? ""),
             x.start_date
           ].some(v => String(v ?? "").toLowerCase().includes(q))
         )
       : rows;
-  }, [rows, query, entryStatuses, bookingModes]);
+  }, [rows, query, entryStatuses, bookingModes, eventTypeLabels, bookingSourceLabels, blockReasonLabels]);
 
   const update = (key: keyof Draft, value: string) => {
     setDraft(d => (d ? { ...d, [key]: value } : d));
@@ -352,7 +370,7 @@ export function BookingManager({
         <div className="master-actions">
           <button
             className="outline-btn"
-            onClick={() => { void load(); void loadPicklists(); }}
+            onClick={() => { void load(); void loadPicklists(); void loadFieldLabels(); }}
             disabled={busy}
           >
             <RefreshCw size={15} /> Refresh
@@ -404,6 +422,9 @@ export function BookingManager({
               <th>Dates / Time</th>
               <th>Mode</th>
               <th>Status</th>
+              <th>Event type</th>
+              <th>Booking source</th>
+              <th>Block reason</th>
               <AuditHeaders/>
               <th>Actions</th>
             </tr>
@@ -429,11 +450,6 @@ export function BookingManager({
                 <tr key={r.id}>
                   <td>
                     <b>{r.event_name || r.block_reason_code || "Calendar entry"}</b>
-                    {r.entry_type === "blocked" && r.block_reason_code && (
-                      <div className="muted">
-                        {r.block_reason_code}
-                      </div>
-                    )}
                   </td>
 
                   <td>{r.customer_name ?? "—"}</td>
@@ -459,6 +475,9 @@ export function BookingManager({
                     </span>
                   </td>
 
+                  <td>{eventTypeLabels.get(r.event_type_code ?? "") ?? r.event_type_code ?? "—"}</td>
+                  <td>{bookingSourceLabels.get(r.booking_source_code ?? "") ?? r.booking_source_code ?? "—"}</td>
+                  <td>{blockReasonLabels.get(r.block_reason_code ?? "") ?? r.block_reason_code ?? "—"}</td>
                   <AuditCells record={r}/>
                   <td>
                     <div className="master-row-actions">
@@ -489,7 +508,7 @@ export function BookingManager({
 
             {!busy && filtered.length === 0 && (
               <tr>
-                <td colSpan={11} className="master-empty">
+                <td colSpan={14} className="master-empty">
                   No bookings or blocked periods found.
                 </td>
               </tr>

@@ -18,21 +18,24 @@ export function PicklistSelect({ supabase, listCode, value, onChange, required }
     let current = true;
     setOptions(null);
     setError("");
-    getLovValues(supabase, listCode)
+    getLovValues(supabase, listCode, true)
       .then(rows => { if (current) setOptions(rows); })
       .catch(() => { if (current) setError("Could not load dropdown options. Reopen the form to retry."); });
     return () => { current = false; };
   }, [supabase, listCode]);
+
+  const active = options?.filter(option => option.is_active !== false);
+  const saved = options?.find(option => option.value_code === value);
 
   return <>
     <select required={required} value={value} onChange={event => onChange(event.target.value)}>
       <option value="" disabled={required}>
         {options ? (required ? "Select an option" : "None") : error ? "Options unavailable" : "Loading options"}
       </option>
-      {value && !options?.some(option => option.value_code === value) && (
-        <option value={value}>{value}{options ? " (saved value)" : ""}</option>
+      {value && !active?.some(option => option.value_code === value) && (
+        <option value={value}>{saved?.display_label ?? value}{options ? " (saved value)" : ""}</option>
       )}
-      {options?.map(option => (
+      {active?.map(option => (
         <option key={option.value_code} value={option.value_code}>{option.display_label}</option>
       ))}
     </select>

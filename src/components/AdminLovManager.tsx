@@ -1,9 +1,10 @@
+import { picklistLayouts } from "../lib/picklistLayouts";
 import { bookingBehaviors } from "../lib/bookingPicklists";
 import { useEffect, useState, type FormEvent } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mprInvoke } from "../lib/mprAuth";
 import type { RecordAudit } from "../lib/recordAudit";
-import { AuditCells, AuditDetails, AuditHeaders } from "./RecordAudit";
+import { AuditCells, AuditHeaders } from "./RecordAudit";
 
 type LovList = RecordAudit & {
   id: string;
@@ -146,10 +147,22 @@ export function AdminLovManager({ supabase }: { supabase: SupabaseClient }) {
           <button type="button" className="primary-btn" disabled={busy} onClick={() => setListDraft(emptyList)}>Add picklist</button>
         </div>
       </div>
-      {selected && <>
-        <p><code>{selected.list_code}</code>{selected.description && <> · {selected.description}</>}</p>
-        <AuditDetails record={selected}/>
-      </>}
+      <div className="master-table-wrap">
+        <table className="master-table">
+          <caption>Picklists</caption>
+          <thead><tr><th>Picklist</th><th>Stable code</th><th>Used on</th><AuditHeaders/></tr></thead>
+          <tbody>
+            {lists.map(list => <tr key={list.id}>
+              <td>{list.list_name}</td>
+              <td><code>{list.list_code}</code></td>
+              <td>{picklistLayouts[list.list_code] ?? "No field linked"}</td>
+              <AuditCells record={list}/>
+            </tr>)}
+            {!lists.length && <tr><td colSpan={7} className="master-empty">No picklists to display.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {selected?.description && <p>{selected.description}</p>}
       {listDraft && (
         <form className="create-user" onSubmit={saveList}>
           <div className="form-grid">

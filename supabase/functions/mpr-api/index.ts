@@ -1,3 +1,4 @@
+import { listChangeHistory } from "./changeHistory.ts";
 import { authenticate, allowed, db, reply, corsHeaders } from "../_shared/auth.ts";
 import { recordActors, recordAudit } from "../_shared/recordAudit.ts";
 
@@ -53,6 +54,11 @@ Deno.serve(async (req) => {
     const b = await req.json();
     const action = String(b.action ?? "");
 
+    if (action === "list-change-history") {
+      if (ctx.user.role !== "admin") return fail("Administrator access required", 403);
+      return await listChangeHistory(b);
+    }
+
     // Existing venue lookup used by calendar and booking forms.
     if (action === "get-active-venues") {
       if (
@@ -89,7 +95,10 @@ Deno.serve(async (req) => {
       const lookup = db.from("lov_values")
         .select("value_code,display_label,description,extra_data,sort_order,is_active")
         .eq("list_id", list.id);
-      const includeInactive = b.include_inactive === true && ["entry_statuses", "booking_modes"].includes(code);
+      const includeInactive = b.include_inactive === true && [
+        "entry_statuses", "booking_modes", "event_types", "booking_sources", "block_reasons",
+        "customer_categories", "venue_types", "auspicious_categories", "regions",
+      ].includes(code);
       const { data, error } = await (includeInactive ? lookup : lookup.eq("is_active", true))
         .order("sort_order")
         .order("display_label");

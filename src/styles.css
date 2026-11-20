@@ -35,17 +35,23 @@
 .master-modal-footer{justify-content:flex-end;margin-top:20px}
 @media(max-width:640px){.master-form-grid{grid-template-columns:1fr}.master-form-grid label.wide{grid-column:auto}.master-toolbar{align-items:stretch}.master-actions{width:100%;flex-wrap:wrap}.master-actions>*{flex:1}}
 
-.record-audit {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 24px;
+
+.history-record-id {
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
 }
 
-.record-audit dt {
-  font-size: 0.8rem;
-  font-weight: 600;
+.history-differences {
+  margin-top: 0.5rem;
 }
 
-.record-audit dd {
-  margin: 4px 0 0;
+.history-differences td {
+  min-width: 6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.history-pagination {
+  justify-content: flex-end;
+  margin-top: 1rem;
 }

@@ -20,6 +20,8 @@ Record tables store created by, created date/time, modified by and modified date
 
 In **Configuration**, administrators can create picklists and add, rename, reorder or deactivate values. Forms use the configured labels and save stable codes. Configurable fields include entry status, booking mode, event type, booking source, block reason, customer category, venue type, auspicious category and region. When adding an entry status or booking mode, select the booking behavior that the new option should use. For example, Tentative can use Pending behavior. Saved bookings retain their selected value when an option is deactivated.
 
+The Configuration table shows where each picklist is used. **Change history** is available to administrators and shows the previous and new values for tracked record fields.
+
 To add a picklist field to another table, add a nullable text column in a migration, attach or extend a BEFORE INSERT OR UPDATE trigger using `public.mpr_validate_picklists('column_name','list_code')`, and use the shared `PicklistSelect` in the corresponding form. Add the field to that module's protected read and write actions. Keep the same list code across SQL and the form. Adding options to a connected field requires only Configuration access.
 
 ## 1. Local setup

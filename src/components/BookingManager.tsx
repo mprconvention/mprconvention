@@ -1,3 +1,6 @@
+import { PicklistSelect } from "./PicklistSelect";
+import { AuditCells, AuditHeaders } from "./RecordAudit";
+import type { RecordAudit } from "../lib/recordAudit";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -23,7 +26,7 @@ type Venue = {
 
 type EntryStatus = "pending" | "confirmed" | "blocked";
 
-type Booking = {
+type Booking = RecordAudit & {
   id: string;
   venue_id: string;
   customer_id: string | null;
@@ -330,6 +333,7 @@ export function BookingManager({
               <th>Dates / Time</th>
               <th>Mode</th>
               <th>Status</th>
+              <AuditHeaders/>
               <th>Actions</th>
             </tr>
           </thead>
@@ -388,6 +392,7 @@ export function BookingManager({
                     </span>
                   </td>
 
+                  <AuditCells record={r}/>
                   <td>
                     <div className="master-row-actions">
                       {can("edit") && r.status === "active" && (
@@ -417,7 +422,7 @@ export function BookingManager({
 
             {!busy && filtered.length === 0 && (
               <tr>
-                <td colSpan={7} className="master-empty">
+                <td colSpan={11} className="master-empty">
                   No bookings or blocked periods found.
                 </td>
               </tr>
@@ -514,15 +519,13 @@ export function BookingManager({
 
               {draft.booking_status === "blocked" && (
                 <label>
-                  Block reason code *
-                  <input
+                  Block reason *
+                  <PicklistSelect
+                    supabase={supabase}
+                    listCode="block_reasons"
                     required
-                    maxLength={100}
                     value={draft.block_reason_code}
-                    onChange={e =>
-                      update("block_reason_code", e.target.value)
-                    }
-                    placeholder="e.g. maintenance, renovation, internal_use"
+                    onChange={value => update("block_reason_code", value)}
                   />
                 </label>
               )}
@@ -628,25 +631,26 @@ export function BookingManager({
                 </>
               )}
 
-              <label>
-                Event type code
-                <input
-                  value={draft.event_type_code}
-                  onChange={e => update("event_type_code", e.target.value)}
-                  placeholder="Optional configuration code"
-                />
-              </label>
-
-              <label>
-                Booking source code
-                <input
-                  value={draft.booking_source_code}
-                  onChange={e =>
-                    update("booking_source_code", e.target.value)
-                  }
-                  placeholder="Optional source code"
-                />
-              </label>
+              {draft.booking_status !== "blocked" && <>
+                <label>
+                  Event type
+                  <PicklistSelect
+                    supabase={supabase}
+                    listCode="event_types"
+                    value={draft.event_type_code}
+                    onChange={value => update("event_type_code", value)}
+                  />
+                </label>
+                <label>
+                  Booking source
+                  <PicklistSelect
+                    supabase={supabase}
+                    listCode="booking_sources"
+                    value={draft.booking_source_code}
+                    onChange={value => update("booking_source_code", value)}
+                  />
+                </label>
+              </>}
 
               <label className="wide">
                 Notes

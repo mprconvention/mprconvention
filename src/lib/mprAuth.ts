@@ -89,7 +89,11 @@ export async function mprInvoke<T>(
     },
   });
 
-  if (error) throw error;
+  if (error) {
+    const context = "context" in error ? error.context : null;
+    const body = context instanceof Response ? await context.json().catch(() => null) : null;
+    throw typeof body?.error === "string" ? new Error(body.error) : error;
+  }
 
   if (data?.error) {
     throw new Error(data.error);

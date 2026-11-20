@@ -1,5 +1,5 @@
-
 import { authenticate, allowed, db, reply, corsHeaders } from "../_shared/auth.ts";
+import { recordActors, recordAudit } from "../_shared/recordAudit.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -90,7 +90,8 @@ Deno.serve(async (req) => {
         .select("value_code,display_label,description,extra_data,sort_order")
         .eq("list_id", list.id)
         .eq("is_active", true)
-        .order("sort_order");
+        .order("sort_order")
+        .order("display_label");
 
       if (error) throw error;
       return reply({ data: data ?? [] });
@@ -116,7 +117,7 @@ Deno.serve(async (req) => {
 
       const [reserved, blocked, auspicious] = await Promise.all([
         db.from("calendar_entries")
-          .select("*")
+          .select(`*,${recordActors("calendar", "_mpr_fk")}`)
           .eq("venue_id", venueId)
           .eq("entry_type", "reserved")
           .eq("status", "active")
@@ -125,7 +126,7 @@ Deno.serve(async (req) => {
           .order("starts_at"),
 
         db.from("calendar_entries")
-          .select("*")
+          .select(`*,${recordActors("calendar", "_mpr_fk")}`)
           .eq("venue_id", venueId)
           .eq("entry_type", "blocked")
           .eq("status", "active")
@@ -134,7 +135,7 @@ Deno.serve(async (req) => {
           .order("starts_at"),
 
         db.from("auspicious_dates")
-          .select("id,date,title,category_code,description,region_code")
+          .select(`id,date,title,category_code,description,region_code,${recordAudit("auspicious", "_mpr_fk")}`)
           .eq("is_active", true)
           .gte("date", start)
           .lte("date", end)
@@ -161,13 +162,36 @@ Deno.serve(async (req) => {
       }
 
       const { data, error } = await db.from("lov_lists")
-        .select("id,list_code,list_name,description")
+        .select(`id,list_code,list_name,description,${recordAudit("lov_lists")}`)
         .eq("is_active", true)
         .order("sort_order")
         .order("list_name");
 
       if (error) throw error;
       return reply({ data: data ?? [] });
+    }
+
+    if (action === "create-lov-list" || action === "update-lov-list") {
+      if (ctx.user.role !== "admin") return fail("Administrator access required", 403);
+
+      const payload = {
+        list_name: requireText(b.list_name, "List name"),
+        description: cleanText(b.description),
+        updated_by: ctx.user.id,
+      };
+      const listId = String(b.id ?? "");
+      const code = String(b.list_code ?? "").trim();
+      const isEdit = action === "update-lov-list";
+      if (isEdit ? !UUID.test(listId) : !/^[a-z][a-z0-9_]{1,62}$/.test(code)) {
+        return fail(isEdit ? "Valid list is required" : "Invalid list code");
+      }
+
+      const query = isEdit
+        ? db.from("lov_lists").update(payload).eq("id", listId)
+        : db.from("lov_lists").insert({ ...payload, list_code: code, created_by: ctx.user.id });
+      const { data, error } = await query.select("id").single();
+      if (error) throw error;
+      return reply({ data }, isEdit ? 200 : 201);
     }
 
     if (action === "list-lov-values") {
@@ -179,7 +203,7 @@ Deno.serve(async (req) => {
       if (!UUID.test(listId)) return fail("Valid list is required");
 
       const { data, error } = await db.from("lov_values")
-        .select("id,value_code,display_label,description,sort_order,is_active,is_default")
+        .select(`id,value_code,display_label,description,sort_order,is_active,is_default,${recordAudit("lov_values", "_mpr_fk")}`)
         .eq("list_id", listId)
         .order("sort_order")
         .order("display_label");
@@ -204,12 +228,15 @@ Deno.serve(async (req) => {
         return fail("Invalid list or value code");
       }
 
+      const sortOrder = b.sort_order ?? 0;
+      if (!Number.isInteger(sortOrder)) return fail("Sort order must be an integer");
+
       const { data, error } = await db.from("lov_values").insert({
         list_id: listId,
         value_code: code,
         display_label: label,
         description: cleanText(b.description),
-        sort_order: Number(b.sort_order ?? 0),
+        sort_order: sortOrder,
         is_active: true,
         created_by: ctx.user.id,
         updated_by: ctx.user.id
@@ -267,7 +294,7 @@ Deno.serve(async (req) => {
       }
 
       const { data, error } = await db.from("customers")
-        .select("id,customer_name,mobile,email,address,city,customer_category_code,notes,created_at,updated_at")
+        .select(`id,customer_name,mobile,email,address,city,customer_category_code,notes,${recordAudit("customers", "_mpr_fk")}`)
         .order("customer_name");
 
       if (error) throw error;
@@ -298,8 +325,7 @@ Deno.serve(async (req) => {
         city: cleanText(b.city, 120),
         customer_category_code: cleanText(b.customer_category_code, 80),
         notes: cleanText(b.notes, 2000),
-        updated_by: ctx.user.id,
-        updated_at: new Date().toISOString()
+        updated_by: ctx.user.id
       };
 
       const query = isEdit
@@ -337,9 +363,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      const { error } = await db.from("customers")
-        .delete()
-        .eq("id", id);
+      const { error } = await db.rpc("mpr_delete_customer", { p_id: id, p_actor_id: ctx.user.id });
 
       if (error) throw error;
       return reply({ ok: true });
@@ -352,7 +376,7 @@ Deno.serve(async (req) => {
       }
 
       const { data, error } = await db.from("venues")
-        .select("id,venue_name,venue_code,venue_type_code,address,city,timezone,is_active,created_at,updated_at")
+        .select(`id,venue_name,venue_code,venue_type_code,address,city,timezone,is_active,${recordAudit("venues")}`)
         .order("venue_name");
 
       if (error) throw error;
@@ -386,13 +410,14 @@ Deno.serve(async (req) => {
           "Timezone",
           100
         ),
-        updated_at: new Date().toISOString()
+        updated_by: ctx.user.id
       };
 
       const query = isEdit
         ? db.from("venues").update(payload).eq("id", id)
         : db.from("venues").insert({
             ...payload,
+            created_by: ctx.user.id,
             is_active: true
           });
 
@@ -413,7 +438,7 @@ Deno.serve(async (req) => {
       const { error } = await db.from("venues")
         .update({
           is_active: false,
-          updated_at: new Date().toISOString()
+          updated_by: ctx.user.id
         })
         .eq("id", id);
 
@@ -428,7 +453,7 @@ Deno.serve(async (req) => {
       }
 
       const { data, error } = await db.from("auspicious_dates")
-        .select("id,date,title,category_code,description,region_code,source,is_active,created_at,updated_at")
+        .select(`id,date,title,category_code,description,region_code,source,is_active,${recordAudit("auspicious", "_mpr_fk")}`)
         .order("date", { ascending: false });
 
       if (error) throw error;
@@ -467,8 +492,7 @@ Deno.serve(async (req) => {
         description: cleanText(b.description, 2000),
         region_code: cleanText(b.region_code, 80),
         source: cleanText(b.source, 500),
-        updated_by: ctx.user.id,
-        updated_at: new Date().toISOString()
+        updated_by: ctx.user.id
       };
 
       const query = isEdit
@@ -496,8 +520,7 @@ Deno.serve(async (req) => {
       const { error } = await db.from("auspicious_dates")
         .update({
           is_active: false,
-          updated_by: ctx.user.id,
-          updated_at: new Date().toISOString()
+          updated_by: ctx.user.id
         })
         .eq("id", id);
 
@@ -516,7 +539,8 @@ Deno.serve(async (req) => {
           id,venue_id,customer_id,event_name,event_type_code,
           booking_source_code,entry_type,booking_mode,start_date,
           end_date,start_time,end_time,booking_status,
-          block_reason_code,status,notes,timezone,starts_at,ends_at
+          block_reason_code,status,notes,timezone,starts_at,ends_at,
+          ${recordAudit("calendar", "_mpr_fk")}
         `)
         .in("entry_type", ["reserved", "blocked"])
         .order("starts_at", { ascending: false });
@@ -596,8 +620,8 @@ Deno.serve(async (req) => {
           "Event or block name",
           200
         ),
-        event_type_code: cleanText(b.event_type_code, 80),
-        booking_source_code: cleanText(b.booking_source_code, 80),
+        event_type_code: isBlocked ? null : cleanText(b.event_type_code, 80),
+        booking_source_code: isBlocked ? null : cleanText(b.booking_source_code, 80),
         booking_mode: b.booking_mode,
         booking_status: isBlocked ? null : entryStatus,
         entry_type: isBlocked ? "blocked" : "reserved",
@@ -636,8 +660,7 @@ Deno.serve(async (req) => {
       const { data, error } = await db.from("calendar_entries")
         .update({
           status: "cancelled",
-          updated_by: ctx.user.id,
-          updated_at: new Date().toISOString()
+          updated_by: ctx.user.id
         })
         .eq("id", id)
         .in("entry_type", ["reserved", "blocked"])

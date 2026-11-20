@@ -9,10 +9,12 @@ Deno.serve(async (req) => {
     const { data: target } = await db.from("mpr_users").select("id,role").eq("id", id).maybeSingle();
     if (!target) return reply({ error: "User not found" }, 404);
     if (target.role === "admin") return reply({ error: "Administrator accounts can only be changed through a controlled SQL procedure" }, 403);
-    const { error } = await db.from("mpr_users").update({ role, is_active: Boolean(b.is_active) }).eq("id", id);
+    const { error } = await db.from("mpr_users").update({ role, is_active: Boolean(b.is_active), updated_by: ctx.user.id }).eq("id", id);
     if (error) throw error;
     await db.from("mpr_sessions").delete().eq("user_id", id);
-    await db.from("user_permissions").delete().eq("user_id", id);
+    if (!Array.isArray(b.permissions)) return reply({ ok: true });
+    const { error: permissionError } = await db.from("user_permissions").delete().eq("user_id", id);
+    if (permissionError) throw permissionError;
     const perms = Array.isArray(b.permissions) ? b.permissions : [];
     const modules = ["dashboard","calendar","bookings","calendar_blocks","customers","venues","auspicious_dates","users","reports","lovs"];
     const actions = ["view","create","edit","delete"];

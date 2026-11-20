@@ -17,7 +17,7 @@ Deno.serve(async (req) => {
     const expires = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
     const { error } = await db.from("mpr_sessions").insert({ user_id: user.id, token_hash: await sha256(token), expires_at: expires });
     if (error) throw error;
-    await db.from("mpr_users").update({ last_login_at: new Date().toISOString() }).eq("id", user.id);
+    await db.from("mpr_users").update({ last_login_at: new Date().toISOString(), updated_by: user.id }).eq("id", user.id);
     const { data: permissions } = await db.from("user_permissions").select("module,action").eq("user_id", user.id);
     delete user.password_hash;
     return reply({ token, expires_at: expires, user, permissions: permissions ?? [] });

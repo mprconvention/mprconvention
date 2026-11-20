@@ -1,3 +1,4 @@
+import { auditFields } from "../lib/recordAudit";
 import { useEffect, useMemo, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -120,11 +121,11 @@ function MonthCalendar({
     return (
       <div style={{ fontSize: 11, marginTop: 4 }}>
         {matchingEntries.map((e) => (
-          <div key={e.id} title={e.event_name ?? e.block_reason_code ?? ""}>
+          <div key={e.id} title={[e.event_name ?? e.block_reason_code ?? "", ...auditFields(e).map(([label, value]) => `${label}: ${value}`)].join("\n")}>
             {e.booking_mode === "time_slot" ? `${e.start_time?.slice(0,5)}–${e.end_time?.slice(0,5)}` : "All day"}
           </div>
         ))}
-        {matchingAuspicious.map((a) => <div key={a.id} title={a.title}>✦ {a.title}</div>)}
+        {matchingAuspicious.map((a) => <div key={a.id} title={[a.title, ...auditFields(a).map(([label, value]) => `${label}: ${value}`)].join("\n")}>✦ {a.title}</div>)}
       </div>
     );
   };

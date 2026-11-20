@@ -1,10 +1,13 @@
+import { PicklistSelect } from "./PicklistSelect";
+import { AuditCells, AuditHeaders } from "./RecordAudit";
+import type { RecordAudit } from "../lib/recordAudit";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Search, Pencil, RefreshCw, X, Save, Power, Trash2 } from "lucide-react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mprInvoke } from "../lib/mprAuth";
 
 type Module = "customers" | "venues" | "auspicious_dates";
-type Row = Record<string, any> & { id?: string };
+type Row = RecordAudit & Record<string, any> & { id?: string };
 type Props = { module: Module; supabase: SupabaseClient; permissions: {module:string;action:string}[]; role: string };
 const configs = {
   customers: { title: "Customers", list: "list-customers", save: "save-customer", deactivate: "delete-customer", columns: ["customer_name","mobile","email","city"] },
@@ -17,6 +20,13 @@ const empty = (module: Module): Row => module === "customers"
   : module === "venues"
   ? { venue_name:"", venue_code:"", venue_type_code:"", address:"", city:"", timezone:"Asia/Kolkata" }
   : { date:"", title:"", category_code:"", description:"", region_code:"", source:"" };
+
+const picklists: Record<string, string> = {
+  customer_category_code: "customer_categories",
+  venue_type_code: "venue_types",
+  category_code: "auspicious_categories",
+  region_code: "regions",
+};
 
 const labels: Record<string,string> = {
   customer_name:"Customer name", mobile:"Mobile", email:"Email", address:"Address", city:"City",
@@ -55,7 +65,8 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
     e.preventDefault(); if (!form) return;
     setBusy(true); setError(""); setMessage("");
     try {
-      await mprInvoke(supabase,"mpr-api",{action:config.save,...form});
+      const fields = Object.keys(empty(module)).map(key => [key, form[key]]);
+      await mprInvoke(supabase,"mpr-api",{action:config.save,id:form.id,...Object.fromEntries(fields)});
       setForm(null); setMessage("Record saved successfully."); await load();
     } catch (e:any) { setError(e.message ?? "Unable to save record."); }
     finally { setBusy(false); }
@@ -88,17 +99,18 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
     {error&&<div className="error-box master-message">{error}</div>}
     {message&&<div className="notice master-message" role="status">{message}<button onClick={()=>setMessage("")}>×</button></div>}
     <div className="master-table-wrap">
-      <table className="master-table"><thead><tr>{columns.map(c=><th key={c}>{labels[c] ?? c}</th>)}<th>Status</th><th>Actions</th></tr></thead>
+      <table className="master-table"><thead><tr>{columns.map(c=><th key={c}>{labels[c] ?? c}</th>)}<th>Status</th><AuditHeaders/><th>Actions</th></tr></thead>
         <tbody>
           {filtered.map(row=><tr key={row.id}>
             {columns.map(c=><td key={c}>{c==="date" ? String(row[c]??"").slice(0,10) : String(row[c]??"—")}</td>)}
             <td><span className={`master-status ${row.is_active===false?"inactive":"active"}`}>{row.is_active===false?"Inactive":"Active"}</span></td>
+            <AuditCells record={row}/>
             <td><div className="master-row-actions">
               {can("edit")&&<button className="icon-btn" title="Edit" onClick={()=>setForm({...row})}><Pencil size={15}/></button>}
               {can("delete")&&<button className="icon-btn danger" title={module==="customers"?"Delete":"Deactivate"} onClick={()=>void deactivate(row)}>{module==="customers"?<Trash2 size={15}/>:<Power size={15}/>}</button>}
             </div></td>
           </tr>)}
-          {!busy && filtered.length===0 && <tr><td colSpan={columns.length+2} className="master-empty">No records found.</td></tr>}
+          {!busy && filtered.length===0 && <tr><td colSpan={columns.length+6} className="master-empty">No records found.</td></tr>}
         </tbody>
       </table>
       {busy&&<div className="master-loading">Working…</div>}
@@ -108,7 +120,9 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
         <div className="master-modal-head"><div><span className="eyebrow">{form.id?"UPDATE RECORD":"NEW RECORD"}</span><h2>{form.id?"Edit":"Add"} {module==="customers"?"customer":module==="venues"?"venue":"auspicious date"}</h2></div><button type="button" className="icon-btn" onClick={()=>setForm(null)}><X size={18}/></button></div>
         <div className="master-form-grid">
           {Object.keys(empty(module)).map(key=><label key={key} className={["address","notes","description"].includes(key)?"wide":""}>{labels[key] ?? key}
-            {["address","notes","description"].includes(key)
+            {picklists[key]
+              ? <PicklistSelect key={picklists[key]} supabase={supabase} listCode={picklists[key]} value={form[key]??""} onChange={value=>setForm({...form,[key]:value})}/>
+              : ["address","notes","description"].includes(key)
               ? <textarea rows={key==="address"?2:3} value={form[key]??""} onChange={e=>setForm({...form,[key]:e.target.value})}/>
               : <input type={key==="date"?"date":key==="email"?"email":"text"} required={["customer_name","venue_name","date","title"].includes(key)} value={form[key]??""} onChange={e=>setForm({...form,[key]:e.target.value})} />}
           </label>)}

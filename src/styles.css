@@ -34,3 +34,18 @@
 .master-form-grid textarea{resize:vertical}
 .master-modal-footer{justify-content:flex-end;margin-top:20px}
 @media(max-width:640px){.master-form-grid{grid-template-columns:1fr}.master-form-grid label.wide{grid-column:auto}.master-toolbar{align-items:stretch}.master-actions{width:100%;flex-wrap:wrap}.master-actions>*{flex:1}}
+
+.record-audit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+
+.record-audit dt {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.record-audit dd {
+  margin: 4px 0 0;
+}

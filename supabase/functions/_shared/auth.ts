@@ -38,7 +38,7 @@ export async function authenticate(req: Request) {
     .select("id,username,email,full_name,role,is_active,must_change_password")
     .eq("id", session.user_id).maybeSingle();
   if (!user?.is_active) return { error: "User account is inactive" } as const;
-  await db.from("mpr_sessions").update({ last_seen_at: new Date().toISOString() }).eq("id", session.id);
+  await db.from("mpr_sessions").update({ last_seen_at: new Date().toISOString(), updated_by: user.id }).eq("id", session.id);
   const { data: permissions } = await db.from("user_permissions").select("module,action").eq("user_id", user.id);
   return { user, permissions: permissions ?? [], sessionId: session.id } as const;
 }

@@ -9,7 +9,7 @@ Deno.serve(async (req) => {
     const full_name = String(b.full_name ?? "").trim(); const password = String(b.password ?? ""); const role = String(b.role ?? "staff");
     const perms = Array.isArray(b.permissions) ? b.permissions : [];
     if (!/^[A-Za-z0-9_.-]{3,50}$/.test(username) || !full_name || password.length < 12 || password.length > 200 || !["manager","staff","viewer"].includes(role)) return reply({ error: "Invalid username, name, password (minimum 12 characters), or role" }, 400);
-    const { data: user, error } = await db.from("mpr_users").insert({ username, email, full_name, role, password_hash: bcrypt.hashSync(password, 12), is_active: true, must_change_password: true }).select("id,username,email,full_name,role,is_active").single();
+    const { data: user, error } = await db.from("mpr_users").insert({ username, email, full_name, role, password_hash: bcrypt.hashSync(password, 12), is_active: true, must_change_password: true, created_by: ctx.user.id }).select("id,username,email,full_name,role,is_active").single();
     if (error) return reply({ error: error.code === "23505" ? "Username or email already exists" : error.message }, 400);
     const validModules = ["dashboard","calendar","bookings","calendar_blocks","customers","venues","auspicious_dates","users","reports","lovs"];
     const validActions = ["view","create","edit","delete"];

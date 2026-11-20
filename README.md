@@ -12,8 +12,15 @@ A React + TypeScript + Vite frontend starter for the existing MPR Supabase proje
 - Administrator LOV configuration screen using existing `mpr-api` actions.
 - Responsive desktop/mobile layout.
 
-## Important implementation boundary
-The currently deployed `mpr-api` from the upgrade package supports active venue lookup, three-calendar reads, LOV list/value reads, and LOV value create/update. The current frontend therefore marks Bookings, Customers, Venues management, Auspicious-date management, and Reports as awaiting their protected CRUD API endpoints. It does not fabricate records or pretend these pages are live. Those backend actions and corresponding forms must be implemented before operational use.
+## Records and configurable picklists
+
+Bookings, customers, venues and auspicious dates use permission-checked API actions. The dashboard summary and Reports are still placeholders.
+
+Record tables store created by, created date/time, modified by and modified date/time. Record screens display actor names and timestamps in India Standard Time (IST). Existing dates are preserved, and unknown historical actors appear as "Not recorded".
+
+In **Configuration**, administrators can create picklists and add, rename, reorder or deactivate values. Forms use the configured labels and save stable codes. Existing fields cover event type, booking source, block reason, customer category, venue type, auspicious category and region. Workflow and permission codes remain managed by application logic.
+
+To add a picklist field to another table, add a nullable text column in a migration, attach or extend a BEFORE INSERT OR UPDATE trigger using `public.mpr_validate_picklists('column_name','list_code')`, and use the shared `PicklistSelect` in the corresponding form. Add the field to that module's protected read and write actions. Keep the same list code across SQL and the form. Adding options to a connected field requires only Configuration access.
 
 ## 1. Local setup
 Install Node.js 20+ and npm. Extract this folder, open a terminal in this folder, then:
@@ -43,7 +50,9 @@ Vite runs at `http://localhost:5173` by default. Your Supabase Edge Function sec
 ## 2. Existing Supabase project
 Migration 006 has already been run by the project owner. **Do not run migration 006 again, and do not rerun migrations 001–005.** The `supabase/` folder is included so the backend source can be maintained/deployed alongside the frontend; the SQL migration is historical reference for this existing project.
 
-The functions were previously deployed. The frontend uses:
+For this update, apply the new `20261120000100_record_metadata_and_picklists.sql` migration after the booking operations migration. Deploy the current Edge Functions, including the shared authentication and audit modules, before deploying the updated frontend.
+
+The frontend uses:
 - `mpr-login`
 - `mpr-me`
 - `mpr-logout`

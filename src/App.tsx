@@ -64,7 +64,7 @@ export default function App() {
   }
 
   if (!configReady || !supabase) return <SetupScreen />;
-  if (loading) return <div className="loading"><div className="brand-mark">M</div><p>Preparing your workspace…</p></div>;
+  if (loading) return <div className="loading"><img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><p>Preparing your workspace…</p></div>;
   if (!user) return <Login onLogin={(u,p) => { setUser(u); setPermissions(p); setNotice('Welcome back. Your MPR workspace is ready.'); }} />;
   if (user.must_change_password) return <ChangePassword onDone={async () => { await signOut(); setNotice('Password updated. Please sign in with your new password.'); }} />;
 
@@ -72,7 +72,7 @@ export default function App() {
 
   return <div className="shell">
     <aside className={`sidebar ${mobile?'open':''}`}>
-      <div className="brand"><div className="brand-mark">M</div><div><b>MPR</b><span>EVENT MANAGEMENT</span></div></div>
+      <div className="brand"><img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><div><b>MPR</b><span>EVENT MANAGEMENT</span></div></div>
       <div className="workspace-label">WORKSPACE</div>
       <nav>{allowedNav.map(n => <button key={n.id} className={`nav-item ${page===n.id?'active':''}`} onClick={() => {setPage(n.id);setMobile(false);}}><n.icon size={18}/><span>{n.label}</span>{page===n.id&&<span className="nav-dot"/>}</button>)}</nav>
       <div className="sidebar-bottom">
@@ -117,7 +117,7 @@ function pageSubtitle(p:Page) {
   return ({dashboard:'Here is what is happening across your venues today.',calendar:'Track reserved, blocked and auspicious dates across every venue.',bookings:'Create, review and manage event reservations.',customers:'Your customer directory and relationship history.',venues:'Manage locations, availability and venue details.',auspicious:'Maintain important dates for your regions and customers.',users:'Manage MPR accounts, roles and module permissions.',lovs:'Control dropdown values and configurable business lists.',history:'Review record changes and their previous values.',reports:'Review booking activity and operational performance.'} as any)[p];
 }
 function SetupScreen() {
-  return <div className="center-screen"><div className="login-card"><div className="brand-mark">M</div><h1>Connect your MPR project</h1><p>Add your Supabase project URL and publishable/anon key to the environment file.</p><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_ANON_KEY</code><p className="muted">Create <b>.env.local</b> in the project root, then restart the development server.</p></div></div>;
+  return <div className="center-screen"><div className="login-card"><img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><h1>Connect your MPR project</h1><p>Add your Supabase project URL and publishable/anon key to the environment file.</p><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_ANON_KEY</code><p className="muted">Create <b>.env.local</b> in the project root, then restart the development server.</p></div></div>;
 }
 
 /* Reusable password field with an independent show/hide toggle. */
@@ -163,13 +163,13 @@ function Login({onLogin}:{onLogin:(u:MprUser,p:{module:string;action:string}[])=
   return <div className="login-layout">
     <div className="login-art">
       <div className="art-orb orb-one"/><div className="art-orb orb-two"/>
-      <div className="brand large"><div className="brand-mark">M</div><div><b>MPR</b><span>EVENT MANAGEMENT</span></div></div>
+      <div className="brand large"><img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><div><b>MPR</b><span>EVENT MANAGEMENT</span></div></div>
       <div className="art-copy"><div className="eyebrow">ONE WORKSPACE. EVERY OCCASION.</div><h1>Make every<br/><em>moment</em> count.</h1><p>Plan venues, coordinate bookings and keep every important date in view.</p></div>
       <div className="art-foot">PRIVATE OPERATIONS PLATFORM <span>•</span> INDIA</div>
     </div>
     <div className="login-panel">
       <form className="login-form" onSubmit={submit}>
-        <div className="mobile-brand"><div className="brand-mark">M</div><b>MPR</b></div>
+        <div className="mobile-brand"><img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><b>MPR</b></div>
         <div className="eyebrow">WELCOME BACK</div><h2>Sign in to MPR</h2>
         <p className="muted">Use your MPR username or registered email.</p>
         {error&&<div className="error-box">{error}</div>}
@@ -200,7 +200,7 @@ function ChangePassword({onDone}:{onDone:()=>void}) {
   }
 
   return <div className="center-screen"><form className="login-card" onSubmit={submit}>
-    <div className="brand-mark">M</div><div className="eyebrow">ACCOUNT SECURITY</div>
+    <img className="brand-mark" src="/mpr-icon-192.png" alt="" width={38} height={38}/><div className="eyebrow">ACCOUNT SECURITY</div>
     <h1>Change your password</h1>
     <p className="muted">Your administrator account requires a new password before continuing.</p>
     {error&&<div className="error-box">{error}</div>}

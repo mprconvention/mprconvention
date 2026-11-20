@@ -1,5 +1,9 @@
-import { bookingBehaviors } from "../lib/bookingPicklists";
+import {
+  bookingBehaviors, bookingEndDate, bookingModeForSchedule,
+  bookingTimeRange, getBookingSchedule, halfDayTimes, type BookingMode,
+} from "../lib/bookingPicklists";
 import { getLovLabels, getLovValues, type LovOption } from "../lib/mprCalendars";
+import { BookingDetails } from "./BookingDetails";
 import { PicklistSelect } from "./PicklistSelect";
 import { AuditCells, AuditHeaders } from "./RecordAudit";
 import type { RecordAudit } from "../lib/recordAudit";
@@ -7,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  Plus, Search, RefreshCw, Pencil, X, Save, Ban
+  Plus, Search, RefreshCw, Pencil, X, Save, Ban, Eye
 } from "lucide-react";
 import { mprInvoke } from "../lib/mprAuth";
 
@@ -27,7 +31,6 @@ type Venue = {
 };
 
 type EntryStatus = "pending" | "confirmed" | "blocked";
-type BookingMode = "full_day" | "time_slot";
 
 type Booking = RecordAudit & {
   id: string;
@@ -143,9 +146,13 @@ export function BookingManager({
   const [blockReasonLabels, setBlockReasonLabels] = useState<Map<string, string>>(new Map());
   const [picklistError, setPicklistError] = useState("");
   const [rows, setRows] = useState<Booking[]>([]);
+  const [detailsId, setDetailsId] = useState<string | null>(null);
+  const details = rows.find(row => row.id === detailsId);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const draftMode = bookingModes.find(option => option.value_code === draft?.booking_mode_code);
+  const schedule = getBookingSchedule(draftMode?.extra_data?.behavior, draft?.booking_mode_code, draft?.booking_mode ?? "full_day");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -303,6 +310,7 @@ export function BookingManager({
       await mprInvoke(supabase, "mpr-api", {
         action: "save-booking",
         ...draft,
+        ...(halfDayTimes[schedule] ? { start_time: null, end_time: null } : {}),
         customer_id:
           draft.booking_status === "blocked"
             ? null
@@ -383,14 +391,15 @@ export function BookingManager({
               onClick={() => {
                 if (!defaultStatus || !defaultMode) return;
                 const date = today();
+                const defaultSchedule = getBookingSchedule(defaultMode.extra_data?.behavior, defaultMode.value_code, "full_day");
                 setDraft({
                   ...blank(),
                   booking_status: defaultStatus.extra_data?.behavior as EntryStatus,
                   entry_status_code: defaultStatus.value_code,
-                  booking_mode: defaultMode.extra_data?.behavior as BookingMode,
+                  booking_mode: bookingModeForSchedule(defaultSchedule),
                   booking_mode_code: defaultMode.value_code,
                   start_date: date,
-                  end_date: date,
+                  end_date: bookingEndDate(defaultSchedule, date, date),
                 });
               }}
             >
@@ -449,7 +458,11 @@ export function BookingManager({
               return (
                 <tr key={r.id}>
                   <td>
-                    <b>{r.event_name || r.block_reason_code || "Calendar entry"}</b>
+                    <button type="button" className="booking-detail-link" onClick={() => setDetailsId(r.id)}
+                      aria-label={`View booking details for ${r.event_name || r.block_reason_code || "calendar entry"}`}>
+                      <Eye size={15} aria-hidden="true"/>
+                      {r.event_name || r.block_reason_code || "Calendar entry"}
+                    </button>
                   </td>
 
                   <td>{r.customer_name ?? "—"}</td>
@@ -460,9 +473,7 @@ export function BookingManager({
                     {r.end_date !== r.start_date
                       ? ` – ${r.end_date}`
                       : ""}
-                    {r.booking_mode === "time_slot"
-                      ? ` · ${String(r.start_time).slice(0, 5)}–${String(r.end_time).slice(0, 5)}`
-                      : ""}
+                    {r.booking_mode === "time_slot" && <> · {bookingTimeRange(r.start_time, r.end_time)}</>}
                   </td>
 
                   <td>
@@ -518,6 +529,34 @@ export function BookingManager({
 
         {busy && <div className="master-loading">Working…</div>}
       </div>
+
+      {details && (
+        <BookingDetails
+          title={details.event_name || (details.entry_type === "blocked" ? "Blocked period" : "Booking details")}
+          fields={[
+            ["Entry type", details.entry_type === "blocked" ? "Venue block" : "Reservation"],
+            ["Entry status", details.status === "active"
+              ? optionLabel(entryStatuses, statusCode(details), "entry_statuses") : "Cancelled"],
+            ["Venue", details.venue_name ?? "—"],
+            ["Booking mode", optionLabel(bookingModes, details.booking_mode_code ?? details.booking_mode, "booking_modes")],
+            ["Start date", details.start_date],
+            ["End date", details.end_date],
+            ["Time", details.booking_mode === "full_day"
+              ? "All day" : bookingTimeRange(details.start_time, details.end_time) || "—"],
+            ["Venue time zone", details.timezone],
+            ...(details.entry_type === "blocked"
+              ? [["Block reason", blockReasonLabels.get(details.block_reason_code ?? "") ?? details.block_reason_code ?? "—"]]
+              : [
+                  ["Customer", details.customer_name ?? "—"],
+                  ["Event type", eventTypeLabels.get(details.event_type_code ?? "") ?? details.event_type_code ?? "—"],
+                  ["Booking source", bookingSourceLabels.get(details.booking_source_code ?? "") ?? details.booking_source_code ?? "—"],
+                ]) as [string, string][],
+          ]}
+          notes={details.notes}
+          audit={details}
+          onClose={() => setDetailsId(null)}
+        />
+      )}
 
       {draft && (
         <div
@@ -641,20 +680,19 @@ export function BookingManager({
                   value={draft.booking_mode_code}
                   onChange={e => {
                     const code = e.target.value;
-                    const mode = bookingModes.find(option => option.value_code === code)?.extra_data?.behavior as BookingMode | undefined;
-                    if (!mode) return;
+                    const option = bookingModes.find(option => option.value_code === code);
+                    if (!option) return;
+                    const nextSchedule = getBookingSchedule(option.extra_data?.behavior, code, "full_day");
+                    const mode = bookingModeForSchedule(nextSchedule);
                     setDraft(d =>
                       d
                         ? {
                             ...d,
                             booking_mode: mode,
                             booking_mode_code: code,
-                            start_time: mode === d.booking_mode ? d.start_time : "",
-                            end_time: mode === d.booking_mode ? d.end_time : "",
-                            end_date:
-                              mode === "time_slot"
-                                ? d.start_date
-                                : d.end_date
+                            start_time: nextSchedule === "time_slot" && schedule === "time_slot" ? d.start_time : "",
+                            end_time: nextSchedule === "time_slot" && schedule === "time_slot" ? d.end_time : "",
+                            end_date: bookingEndDate(nextSchedule, d.start_date, d.end_date)
                           }
                         : d
                     );
@@ -665,7 +703,7 @@ export function BookingManager({
               </label>
 
               <label>
-                Start date *
+                {draft.booking_mode === "time_slot" ? "Date *" : "Start date *"}
                 <input
                   type="date"
                   required
@@ -676,9 +714,7 @@ export function BookingManager({
                         ? {
                             ...d,
                             start_date: e.target.value,
-                            ...(d.booking_mode === "time_slot"
-                              ? { end_date: e.target.value }
-                              : {})
+                            end_date: bookingEndDate(schedule, e.target.value, d.end_date)
                           }
                         : d
                     )
@@ -686,19 +722,27 @@ export function BookingManager({
                 />
               </label>
 
-              <label>
-                End date *
-                <input
-                  type="date"
-                  required
-                  min={draft.start_date}
-                  disabled={draft.booking_mode === "time_slot"}
-                  value={draft.end_date}
-                  onChange={e => update("end_date", e.target.value)}
-                />
-              </label>
+              {draft.booking_mode === "full_day" && (
+                <label>
+                  End date (inclusive) *
+                  <input
+                    type="date"
+                    required
+                    min={bookingEndDate(schedule, draft.start_date, "")}
+                    value={draft.end_date}
+                    onChange={e => update("end_date", e.target.value)}
+                  />
+                </label>
+              )}
 
-              {draft.booking_mode === "time_slot" && (
+              {halfDayTimes[schedule] && (
+                <div className="muted booking-period">
+                  <strong>{halfDayTimes[schedule]}</strong>
+                  <span>Venue local time</span>
+                </div>
+              )}
+
+              {schedule === "time_slot" && (
                 <>
                   <label>
                     Start time *

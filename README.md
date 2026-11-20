@@ -18,7 +18,7 @@ Bookings, customers, venues and auspicious dates use permission-checked API acti
 
 Record tables store created by, created date/time, modified by and modified date/time. Record screens display actor names and timestamps in India Standard Time (IST). Existing dates are preserved, and unknown historical actors appear as "Not recorded".
 
-In **Configuration**, administrators can create picklists and add, rename, reorder or deactivate values. Forms use the configured labels and save stable codes. Existing fields cover event type, booking source, block reason, customer category, venue type, auspicious category and region. Workflow and permission codes remain managed by application logic.
+In **Configuration**, administrators can create picklists and add, rename, reorder or deactivate values. Forms use the configured labels and save stable codes. Configurable fields include entry status, booking mode, event type, booking source, block reason, customer category, venue type, auspicious category and region. When adding an entry status or booking mode, select the booking behavior that the new option should use. For example, Tentative can use Pending behavior. Saved bookings retain their selected value when an option is deactivated.
 
 To add a picklist field to another table, add a nullable text column in a migration, attach or extend a BEFORE INSERT OR UPDATE trigger using `public.mpr_validate_picklists('column_name','list_code')`, and use the shared `PicklistSelect` in the corresponding form. Add the field to that module's protected read and write actions. Keep the same list code across SQL and the form. Adding options to a connected field requires only Configuration access.
 
@@ -50,7 +50,7 @@ Vite runs at `http://localhost:5173` by default. Your Supabase Edge Function sec
 ## 2. Existing Supabase project
 Migration 006 has already been run by the project owner. **Do not run migration 006 again, and do not rerun migrations 001–005.** The `supabase/` folder is included so the backend source can be maintained/deployed alongside the frontend; the SQL migration is historical reference for this existing project.
 
-For this update, apply the new `20261120000100_record_metadata_and_picklists.sql` migration after the booking operations migration. Deploy the current Edge Functions, including the shared authentication and audit modules, before deploying the updated frontend.
+For this update, apply the new `20261120000100_record_metadata_and_picklists.sql` migration after the booking operations migration, followed by the `20261120000200_booking_picklists.sql` migration. Deploy the current Edge Functions, including the shared authentication and audit modules, before deploying the updated frontend.
 
 The frontend uses:
 - `mpr-login`

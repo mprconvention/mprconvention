@@ -1,3 +1,4 @@
+import { getLovValues } from "../lib/mprCalendars";
 import { PicklistSelect } from "./PicklistSelect";
 import { AuditCells, AuditHeaders } from "./RecordAudit";
 import type { RecordAudit } from "../lib/recordAudit";
@@ -38,6 +39,7 @@ const labels: Record<string,string> = {
 export function MasterDataManager({ module, supabase, permissions, role }: Props) {
   const config = configs[module];
   const can = (action:string) => role === "admin" || (role === "manager" && module === "auspicious_dates") || permissions.some(p => p.module === module && p.action === action);
+  const [categoryLabels, setCategoryLabels] = useState<Map<string, string>>(new Map());
   const [rows,setRows] = useState<Row[]>([]);
   const [query,setQuery] = useState("");
   const [form,setForm] = useState<Row|null>(null);
@@ -54,12 +56,25 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
     finally { setBusy(false); }
   }, [supabase, config.list]);
 
-  useEffect(() => { void load(); }, [load]);
+  const loadCategories = useCallback(async () => {
+    if (module !== "auspicious_dates") return;
+    try {
+      const options = await getLovValues(supabase, picklists.category_code);
+      setCategoryLabels(new Map(options.map(option => [option.value_code, option.display_label])));
+    } catch {
+      // Saved codes remain visible when the labels cannot be loaded.
+    }
+  }, [module, supabase]);
+
+  useEffect(() => {
+    void load();
+    void loadCategories();
+  }, [load, loadCategories]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q ? rows.filter(row => Object.values(row).some(v => String(v ?? "").toLowerCase().includes(q))) : rows;
-  }, [rows,query]);
+    return q ? rows.filter(row => [...Object.values(row), categoryLabels.get(row.category_code)].some(v => String(v ?? "").toLowerCase().includes(q))) : rows;
+  }, [rows,query,categoryLabels]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault(); if (!form) return;
@@ -92,7 +107,7 @@ export function MasterDataManager({ module, supabase, permissions, role }: Props
     <div className="master-toolbar">
       <div className="master-search"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Search ${config.title.toLowerCase()}…`}/></div>
       <div className="master-actions">
-        <button className="outline-btn" onClick={()=>void load()} disabled={busy}><RefreshCw size={15}/> Refresh</button>
+        <button className="outline-btn" onClick={()=>{void load(); void loadCategories();}} disabled={busy}><RefreshCw size={15}/> Refresh</button>
         {can("create") && <button className="primary-btn" onClick={()=>setForm({...empty(module),id:""})}><Plus size={16}/> Add {module==="customers"?"customer":module==="venues"?"venue":"date"}</button>}
       </div>
     </div>

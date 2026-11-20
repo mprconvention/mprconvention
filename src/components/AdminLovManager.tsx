@@ -1,3 +1,4 @@
+import { bookingBehaviors } from "../lib/bookingPicklists";
 import { useEffect, useState, type FormEvent } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mprInvoke } from "../lib/mprAuth";
@@ -18,6 +19,7 @@ type LovValue = RecordAudit & {
   description: string | null;
   sort_order: number;
   is_active: boolean;
+  extra_data?: { behavior?: string };
 };
 
 type ListDraft = { id?: string; list_code: string; list_name: string; description: string | null };
@@ -35,10 +37,12 @@ export function AdminLovManager({ supabase }: { supabase: SupabaseClient }) {
   const [revision, setRevision] = useState(0);
   const [label, setLabel] = useState("");
   const [code, setCode] = useState("");
+  const [behavior, setBehavior] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const selected = lists.find(list => list.id === listId);
+  const behaviors = selected && bookingBehaviors[selected.list_code];
 
   useEffect(() => {
     let current = true;
@@ -78,6 +82,7 @@ export function AdminLovManager({ supabase }: { supabase: SupabaseClient }) {
       });
       if (data.id !== listId) setValues([]);
       setListId(data.id);
+      setBehavior("");
       setListDraft(null);
       setRevision(value => value + 1);
     } catch (error) {
@@ -108,8 +113,10 @@ export function AdminLovManager({ supabase }: { supabase: SupabaseClient }) {
     if (await saveValue({
       action: "add-lov-value", list_id: listId, value_code: code,
       display_label: label, description, sort_order: sortOrder,
+      ...(behaviors ? { behavior } : {}),
     })) {
       setCode("");
+      setBehavior("");
       setLabel("");
       setDescription("");
     }
@@ -124,6 +131,7 @@ export function AdminLovManager({ supabase }: { supabase: SupabaseClient }) {
             setValues([]);
             setListDraft(null);
             setCode("");
+            setBehavior("");
             setLabel("");
             setDescription("");
             setListId(event.target.value);
@@ -163,6 +171,10 @@ export function AdminLovManager({ supabase }: { supabase: SupabaseClient }) {
           <h3>Add value</h3>
           <div className="form-grid">
             <label>Stable code<input required pattern="[a-z][a-z0-9_]{0,62}" value={code} onChange={event => setCode(event.target.value)}/></label>
+            {behaviors && <label>Booking behavior<select required value={behavior} onChange={event => setBehavior(event.target.value)}>
+              <option value="">Select behavior</option>
+              {Object.entries(behaviors).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+            </select></label>}
             <label>Display label<input required maxLength={200} value={label} onChange={event => setLabel(event.target.value)}/></label>
             <label>Description<input maxLength={500} value={description} onChange={event => setDescription(event.target.value)}/></label>
           </div>
@@ -170,13 +182,13 @@ export function AdminLovManager({ supabase }: { supabase: SupabaseClient }) {
         </form>
         <div className="master-table-wrap">
           <table className="master-table">
-            <thead><tr><th>Code</th><th>Display label</th><th>Description</th><th>Sort order</th><th>Active</th><AuditHeaders/><th>Actions</th></tr></thead>
+            <thead><tr><th>Code</th><th>Display label</th><th>Description</th><th>Sort order</th><th>Active</th>{behaviors && <th>Booking behavior</th>}<AuditHeaders/><th>Actions</th></tr></thead>
             <tbody>
               {values.map(value => (
-                <ValueRow key={`${value.id}-${value.updated_at}`} value={value} busy={busy}
+                <ValueRow key={`${value.id}-${value.updated_at}`} value={value} busy={busy} behaviors={behaviors || undefined}
                   onSave={patch => saveValue({ action: "update-lov-value", id: value.id, ...patch })}/>
               ))}
-              {!values.length && <tr><td colSpan={10}>No values to display.</td></tr>}
+              {!values.length && <tr><td colSpan={behaviors ? 11 : 10}>No values to display.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -187,9 +199,10 @@ export function AdminLovManager({ supabase }: { supabase: SupabaseClient }) {
 
 type ValuePatch = Pick<LovValue, "display_label" | "description" | "sort_order" | "is_active">;
 
-function ValueRow({ value, busy, onSave }: {
+function ValueRow({ value, busy, behaviors, onSave }: {
   value: LovValue;
   busy: boolean;
+  behaviors?: Readonly<Record<string, string>>;
   onSave: (patch: ValuePatch) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState<ValuePatch>(value);
@@ -206,6 +219,7 @@ function ValueRow({ value, busy, onSave }: {
         onChange={event => setSortOrder(event.target.value)}/></td>
       <td><input aria-label={`Active status for ${value.value_code}`} type="checkbox" checked={draft.is_active}
         onChange={event => setDraft({ ...draft, is_active: event.target.checked })}/></td>
+      {behaviors && <td>{behaviors[value.extra_data?.behavior ?? ""] ?? "Unassigned"}</td>}
       <AuditCells record={value}/>
       <td><button type="button" className="outline-btn" disabled={busy || !draft.display_label.trim() || !validOrder}
         onClick={() => void onSave({

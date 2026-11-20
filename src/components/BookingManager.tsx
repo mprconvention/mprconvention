@@ -1,3 +1,5 @@
+import { bookingBehaviors } from "../lib/bookingPicklists";
+import { getLovValues, type LovOption } from "../lib/mprCalendars";
 import { PicklistSelect } from "./PicklistSelect";
 import { AuditCells, AuditHeaders } from "./RecordAudit";
 import type { RecordAudit } from "../lib/recordAudit";
@@ -25,6 +27,7 @@ type Venue = {
 };
 
 type EntryStatus = "pending" | "confirmed" | "blocked";
+type BookingMode = "full_day" | "time_slot";
 
 type Booking = RecordAudit & {
   id: string;
@@ -34,12 +37,14 @@ type Booking = RecordAudit & {
   event_type_code: string | null;
   booking_source_code: string | null;
   entry_type: "reserved" | "blocked";
-  booking_mode: "full_day" | "time_slot";
+  booking_mode: BookingMode;
   start_date: string;
   end_date: string;
   start_time: string | null;
   end_time: string | null;
   booking_status: "pending" | "confirmed" | null;
+  entry_status_code?: string | null;
+  booking_mode_code?: string | null;
   block_reason_code: string | null;
   status: string;
   notes: string | null;
@@ -55,12 +60,14 @@ type Draft = {
   event_name: string;
   event_type_code: string;
   booking_source_code: string;
-  booking_mode: "full_day" | "time_slot";
+  booking_mode: BookingMode;
   start_date: string;
   end_date: string;
   start_time: string;
   end_time: string;
   booking_status: EntryStatus;
+  entry_status_code: string;
+  booking_mode_code: string;
   block_reason_code: string;
   notes: string;
 };
@@ -83,9 +90,35 @@ const blank = (): Draft => ({
   start_time: "",
   end_time: "",
   booking_status: "pending",
+  entry_status_code: "pending",
+  booking_mode_code: "full_day",
   block_reason_code: "",
   notes: ""
 });
+
+function statusCode(row: Booking) {
+  return row.entry_status_code ?? (row.entry_type === "blocked" ? "blocked" : row.booking_status ?? "pending");
+}
+
+function optionLabel(options: LovOption[], code: string, listCode: string) {
+  return options.find(option => option.value_code === code)?.display_label
+    ?? bookingBehaviors[listCode][code]
+    ?? code;
+}
+
+function isActiveOption(option: LovOption, listCode: string) {
+  return option.is_active && Object.hasOwn(bookingBehaviors[listCode], option.extra_data?.behavior ?? "");
+}
+
+function WorkflowOptions({ options, value, listCode }: { options: LovOption[]; value: string; listCode: string }) {
+  const active = options.filter(option => isActiveOption(option, listCode));
+  return <>
+    {value && !active.some(option => option.value_code === value) && (
+      <option value={value}>{optionLabel(options, value, listCode)} (saved value)</option>
+    )}
+    {active.map(option => <option key={option.value_code} value={option.value_code}>{option.display_label}</option>)}
+  </>;
+}
 
 const today = () =>
   new Date().toLocaleDateString("en-CA", {
@@ -103,6 +136,9 @@ export function BookingManager({
       p => p.module === "bookings" && p.action === action
     );
 
+  const [entryStatuses, setEntryStatuses] = useState<LovOption[]>([]);
+  const [bookingModes, setBookingModes] = useState<LovOption[]>([]);
+  const [picklistError, setPicklistError] = useState("");
   const [rows, setRows] = useState<Booking[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
@@ -111,6 +147,28 @@ export function BookingManager({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+
+  const loadPicklists = useCallback(async () => {
+    setPicklistError("");
+    try {
+      const [statuses, modes] = await Promise.all([
+        getLovValues(supabase, "entry_statuses", true),
+        getLovValues(supabase, "booking_modes", true),
+      ]);
+      setEntryStatuses(statuses);
+      setBookingModes(modes);
+      if (!statuses.some(option => isActiveOption(option, "entry_statuses")) || !modes.some(option => isActiveOption(option, "booking_modes"))) {
+        setPicklistError("Enable an entry status and booking mode in Configuration to create an entry.");
+      }
+    } catch {
+      setPicklistError("Could not load booking options. Refresh to retry.");
+    }
+  }, [supabase]);
+
+  const defaultStatus = entryStatuses.find(option => isActiveOption(option, "entry_statuses") && option.value_code === "pending")
+    ?? entryStatuses.find(option => isActiveOption(option, "entry_statuses"));
+  const defaultMode = bookingModes.find(option => isActiveOption(option, "booking_modes") && option.value_code === "full_day")
+    ?? bookingModes.find(option => isActiveOption(option, "booking_modes"));
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -164,7 +222,8 @@ export function BookingManager({
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadPicklists();
+  }, [load, loadPicklists]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -176,13 +235,15 @@ export function BookingManager({
             x.customer_name,
             x.venue_name,
             x.booking_status,
+            optionLabel(entryStatuses, statusCode(x), "entry_statuses"),
+            optionLabel(bookingModes, x.booking_mode_code ?? x.booking_mode, "booking_modes"),
             x.entry_type === "blocked" ? "blocked" : "",
             x.block_reason_code,
             x.start_date
           ].some(v => String(v ?? "").toLowerCase().includes(q))
         )
       : rows;
-  }, [rows, query]);
+  }, [rows, query, entryStatuses, bookingModes]);
 
   const update = (key: keyof Draft, value: string) => {
     setDraft(d => (d ? { ...d, [key]: value } : d));
@@ -197,6 +258,8 @@ export function BookingManager({
       event_type_code: row.event_type_code ?? "",
       booking_source_code: row.booking_source_code ?? "",
       booking_mode: row.booking_mode,
+      entry_status_code: statusCode(row),
+      booking_mode_code: row.booking_mode_code ?? row.booking_mode,
       start_date: row.start_date,
       end_date: row.end_date,
       start_time: row.start_time ?? "",
@@ -289,7 +352,7 @@ export function BookingManager({
         <div className="master-actions">
           <button
             className="outline-btn"
-            onClick={() => void load()}
+            onClick={() => { void load(); void loadPicklists(); }}
             disabled={busy}
           >
             <RefreshCw size={15} /> Refresh
@@ -298,13 +361,20 @@ export function BookingManager({
           {can("create") && (
             <button
               className="primary-btn"
-              onClick={() =>
+              disabled={!defaultStatus || !defaultMode}
+              onClick={() => {
+                if (!defaultStatus || !defaultMode) return;
+                const date = today();
                 setDraft({
                   ...blank(),
-                  start_date: today(),
-                  end_date: today()
-                })
-              }
+                  booking_status: defaultStatus.extra_data?.behavior as EntryStatus,
+                  entry_status_code: defaultStatus.value_code,
+                  booking_mode: defaultMode.extra_data?.behavior as BookingMode,
+                  booking_mode_code: defaultMode.value_code,
+                  start_date: date,
+                  end_date: date,
+                });
+              }}
             >
               <Plus size={16} /> New booking / block
             </button>
@@ -312,6 +382,7 @@ export function BookingManager({
         </div>
       </div>
 
+      {picklistError && <div className="error-box master-message" role="alert">{picklistError}</div>}
       {error && (
         <div className="error-box master-message">{error}</div>
       )}
@@ -343,9 +414,7 @@ export function BookingManager({
               const displayStatus =
                 r.status !== "active"
                   ? "Cancelled"
-                  : r.entry_type === "blocked"
-                    ? "Blocked"
-                    : r.booking_status ?? "Pending";
+                  : optionLabel(entryStatuses, statusCode(r), "entry_statuses");
 
               const statusClass =
                 r.status !== "active"
@@ -381,9 +450,7 @@ export function BookingManager({
                   </td>
 
                   <td>
-                    {r.booking_mode === "full_day"
-                      ? "Full day"
-                      : "Time slot"}
+                    {optionLabel(bookingModes, r.booking_mode_code ?? r.booking_mode, "booking_modes")}
                   </td>
 
                   <td>
@@ -466,14 +533,18 @@ export function BookingManager({
               <label>
                 Entry status *
                 <select
-                  value={draft.booking_status}
+                  required
+                  value={draft.entry_status_code}
                   onChange={e => {
-                    const status = e.target.value as EntryStatus;
+                    const code = e.target.value;
+                    const status = entryStatuses.find(option => option.value_code === code)?.extra_data?.behavior as EntryStatus | undefined;
+                    if (!status) return;
                     setDraft(d =>
                       d
                         ? {
                             ...d,
                             booking_status: status,
+                            entry_status_code: code,
                             customer_id:
                               status === "blocked" ? "" : d.customer_id
                           }
@@ -481,9 +552,7 @@ export function BookingManager({
                     );
                   }}
                 >
-                  <option value="pending">Pending</option>
-                  <option value="confirmed">Confirmed</option>
-                  <option value="blocked">Blocked</option>
+                  <WorkflowOptions options={entryStatuses} value={draft.entry_status_code} listCode="entry_statuses"/>
                 </select>
               </label>
 
@@ -549,16 +618,20 @@ export function BookingManager({
               <label>
                 Booking mode *
                 <select
-                  value={draft.booking_mode}
+                  required
+                  value={draft.booking_mode_code}
                   onChange={e => {
-                    const mode = e.target.value as Draft["booking_mode"];
+                    const code = e.target.value;
+                    const mode = bookingModes.find(option => option.value_code === code)?.extra_data?.behavior as BookingMode | undefined;
+                    if (!mode) return;
                     setDraft(d =>
                       d
                         ? {
                             ...d,
                             booking_mode: mode,
-                            start_time: "",
-                            end_time: "",
+                            booking_mode_code: code,
+                            start_time: mode === d.booking_mode ? d.start_time : "",
+                            end_time: mode === d.booking_mode ? d.end_time : "",
                             end_date:
                               mode === "time_slot"
                                 ? d.start_date
@@ -568,8 +641,7 @@ export function BookingManager({
                     );
                   }}
                 >
-                  <option value="full_day">Full day</option>
-                  <option value="time_slot">Time slot (same day)</option>
+                  <WorkflowOptions options={bookingModes} value={draft.booking_mode_code} listCode="booking_modes"/>
                 </select>
               </label>
 

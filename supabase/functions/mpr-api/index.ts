@@ -86,10 +86,11 @@ Deno.serve(async (req) => {
       if (le) throw le;
       if (!list) return reply({ data: [] });
 
-      const { data, error } = await db.from("lov_values")
-        .select("value_code,display_label,description,extra_data,sort_order")
-        .eq("list_id", list.id)
-        .eq("is_active", true)
+      const lookup = db.from("lov_values")
+        .select("value_code,display_label,description,extra_data,sort_order,is_active")
+        .eq("list_id", list.id);
+      const includeInactive = b.include_inactive === true && ["entry_statuses", "booking_modes"].includes(code);
+      const { data, error } = await (includeInactive ? lookup : lookup.eq("is_active", true))
         .order("sort_order")
         .order("display_label");
 
@@ -203,7 +204,7 @@ Deno.serve(async (req) => {
       if (!UUID.test(listId)) return fail("Valid list is required");
 
       const { data, error } = await db.from("lov_values")
-        .select(`id,value_code,display_label,description,sort_order,is_active,is_default,${recordAudit("lov_values", "_mpr_fk")}`)
+        .select(`id,value_code,display_label,description,sort_order,is_active,is_default,extra_data,${recordAudit("lov_values", "_mpr_fk")}`)
         .eq("list_id", listId)
         .order("sort_order")
         .order("display_label");
@@ -237,6 +238,7 @@ Deno.serve(async (req) => {
         display_label: label,
         description: cleanText(b.description),
         sort_order: sortOrder,
+        extra_data: typeof b.behavior === "string" ? { behavior: b.behavior } : {},
         is_active: true,
         created_by: ctx.user.id,
         updated_by: ctx.user.id
@@ -538,7 +540,7 @@ Deno.serve(async (req) => {
         .select(`
           id,venue_id,customer_id,event_name,event_type_code,
           booking_source_code,entry_type,booking_mode,start_date,
-          end_date,start_time,end_time,booking_status,
+          end_date,start_time,end_time,booking_status,entry_status_code,booking_mode_code,
           block_reason_code,status,notes,timezone,starts_at,ends_at,
           ${recordAudit("calendar", "_mpr_fk")}
         `)
@@ -623,6 +625,8 @@ Deno.serve(async (req) => {
         event_type_code: isBlocked ? null : cleanText(b.event_type_code, 80),
         booking_source_code: isBlocked ? null : cleanText(b.booking_source_code, 80),
         booking_mode: b.booking_mode,
+        entry_status_code: cleanText(b.entry_status_code, 63),
+        booking_mode_code: cleanText(b.booking_mode_code, 63),
         booking_status: isBlocked ? null : entryStatus,
         entry_type: isBlocked ? "blocked" : "reserved",
         block_reason_code: blockReason,

@@ -10,7 +10,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
 
-      includeAssets: ['mpr-icon.svg'],
+      includeAssets: ['mpr-apple-touch-icon.png'],
 
       manifest: {
         name: 'MPR | Event Management',
@@ -25,10 +25,22 @@ export default defineConfig({
 
         icons: [
           {
-            src: '/mpr-icon.svg',
-            sizes: 'any',
-            type: 'image/svg+xml',
+            src: '/mpr-icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
             purpose: 'any'
+          },
+          {
+            src: '/mpr-icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/mpr-icon-maskable-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
           }
         ]
       },

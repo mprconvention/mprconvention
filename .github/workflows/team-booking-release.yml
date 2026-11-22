@@ -77,7 +77,7 @@ jobs:
       - uses: supabase/setup-cli@v3
         with:
           version: 2.122.0
-      - name: Validate release targets and build the frontend
+      - name: Validate release targets and prepare the frontend build
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
@@ -108,8 +108,57 @@ jobs:
             *) echo "::error::Vercel project lookup returned HTTP $status."; exit 1 ;;
           esac
           npm install --global "vercel@$VERCEL_CLI_VERSION"
-          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-          vercel build --prod --token="$VERCEL_TOKEN"
+          # Fetch only the two public client settings required to build the SPA.
+          # The CLI pull command also looks up user and team settings.
+          node --input-type=module <<'NODE'
+          import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+
+          const { VERCEL_ORG_ID: orgId, VERCEL_PROJECT_ID: projectId, VERCEL_TOKEN, GITHUB_ENV } = process.env;
+          async function getVercel(path, description) {
+            const url = new URL(path, 'https://api.vercel.com');
+            url.searchParams.set('teamId', orgId);
+            const response = await fetch(url, {
+              headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+              signal: AbortSignal.timeout(20_000),
+              redirect: 'error',
+            });
+            if (!response.ok) throw new Error(`${description} failed (Vercel HTTP ${response.status}).`);
+            return response.json();
+          }
+
+          const { envs } = await getVercel(`/v10/projects/${projectId}/env`, 'Reading project environment settings');
+          const entries = await Promise.all(['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'].map(async key => {
+            const matching = envs.filter(env => env.key === key && env.target?.includes('production') && !env.gitBranch);
+            if (matching.length !== 1 || !matching[0].id) {
+              throw new Error(`Set exactly one ${key} value for Production in Vercel project settings.`);
+            }
+            const { value } = await getVercel(`/v1/projects/${projectId}/env/${encodeURIComponent(matching[0].id)}`, `Reading ${key}`);
+            if (typeof value !== 'string' || !value || /\s/.test(value)) {
+              throw new Error(`Vercel returned an empty or invalid ${key} value.`);
+            }
+            return [key, value];
+          }));
+          const { VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY } = Object.fromEntries(entries);
+          if (!/^https:\/\/[^/]+\/?$/.test(VITE_SUPABASE_URL)) throw new Error('VITE_SUPABASE_URL must be an HTTPS project URL.');
+          // Only publishable keys and legacy anon JWTs belong in client bundles.
+          const jwt = VITE_SUPABASE_ANON_KEY.split('.');
+          const isPublicKey = VITE_SUPABASE_ANON_KEY.startsWith('sb_publishable_') ||
+            (jwt.length === 3 && JSON.parse(Buffer.from(jwt[1], 'base64url').toString()).role === 'anon');
+          if (!isPublicKey) throw new Error('VITE_SUPABASE_ANON_KEY must be a publishable or legacy anon key.');
+          appendFileSync(GITHUB_ENV, entries.map(([key, value]) => `${key}=${value}\n`).join(''));
+          mkdirSync('.vercel/output', { recursive: true });
+          writeFileSync('.vercel/project.json', JSON.stringify({ orgId, projectId }));
+          writeFileSync('.vercel/output/config.json', JSON.stringify({
+            version: 3,
+            routes: [{ handle: 'filesystem' }, { src: '/(.*)', dest: '/index.html' }],
+          }));
+          NODE
+      - name: Build the prebuilt frontend
+        run: |
+          npm ci
+          npm run build
+          mkdir -p .vercel/output/static
+          cp -a dist/. .vercel/output/static/
       - name: Verify migration history and deploy the backend
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -123,4 +172,6 @@ jobs:
       - name: Publish the verified frontend
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN"

@@ -89,6 +89,24 @@ jobs:
         run: |
           : "${VERCEL_TOKEN:?}" "${VERCEL_ORG_ID:?}" "${VERCEL_PROJECT_ID:?}" "${VERCEL_CLI_VERSION:?}"
           : "${SUPABASE_DB_URL:?}" "${SUPABASE_ACCESS_TOKEN:?}" "${SUPABASE_PROJECT_REF:?}"
+          if [[ ! "$VERCEL_ORG_ID" =~ ^team_[[:alnum:]]+$ ]] || [[ ! "$VERCEL_PROJECT_ID" =~ ^prj_[[:alnum:]]+$ ]]; then
+            echo "::error::Use the Team ID for VERCEL_ORG_ID and the Project ID for VERCEL_PROJECT_ID from Vercel General settings."
+            exit 1
+          fi
+          if ! status=$(curl --silent --show-error --max-time 20 --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $VERCEL_TOKEN" \
+            --get --data-urlencode "teamId=$VERCEL_ORG_ID" \
+            "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID"); then
+            echo "::error::Could not connect to the Vercel API."
+            exit 1
+          fi
+          case "$status" in
+            200) echo "Vercel token can read the configured project." ;;
+            401) echo "::error::Vercel rejected VERCEL_TOKEN. Check that the token is valid and unexpired."; exit 1 ;;
+            403) echo "::error::Vercel denied project access. Check that VERCEL_TOKEN is scoped to the project's team and that its owner has access."; exit 1 ;;
+            404) echo "::error::Vercel could not resolve the project in the configured team. Verify that both IDs come from the same workspace and that the token can see the project."; exit 1 ;;
+            *) echo "::error::Vercel project lookup returned HTTP $status."; exit 1 ;;
+          esac
           npm install --global "vercel@$VERCEL_CLI_VERSION"
           vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
           vercel build --prod --token="$VERCEL_TOKEN"
